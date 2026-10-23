@@ -308,11 +308,32 @@ function demoSessionUser(): UserProfile | null {
 }
 
 /* ---------------- CRUD ---------------- */
+/**
+ * Firestore Timestamp / Date alanlarını ISO string'e çevirir.
+ * (serverTimestamp ile yazılan createdAt/updatedAt okurken Timestamp NESNESİ döner;
+ *  view'lar string bekler — aksi halde ".localeCompare is not a function" ile uygulama çöker.)
+ */
+function normalizeDates<T>(row: T): T {
+  if (!row || typeof row !== 'object') return row;
+  const out = { ...(row as Record<string, unknown>) };
+  for (const k of Object.keys(out)) {
+    const v = out[k];
+    if (v && typeof v === 'object') {
+      if (typeof (v as { toDate?: unknown }).toDate === 'function') {
+        try { out[k] = (v as { toDate(): Date }).toDate().toISOString(); } catch { /* olduğu gibi kalsın */ }
+      } else if (v instanceof Date) {
+        try { out[k] = v.toISOString(); } catch { /* olduğu gibi kalsın */ }
+      }
+    }
+  }
+  return out as T;
+}
+
 export async function list<C extends ColName>(col: C): Promise<DemoDB[C]> {
   if (mode === 'demo') return demoRows(col).map((x) => ({ ...(x as object) })) as DemoDB[C];
   const f = fb!;
   const snap = await getDocs(collection(f.db, col));
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() })) as DemoDB[C];
+  return snap.docs.map((d) => normalizeDates({ id: d.id, ...d.data() })) as DemoDB[C];
 }
 
 export async function add<C extends ColName>(col: C, data: Record<string, unknown>, explicitId: string | null = null): Promise<string> {
@@ -375,7 +396,7 @@ export function watch<C extends ColName>(col: C, cb: (rows: DemoDB[C]) => void):
   }
   const f = fb!;
   return onSnapshot(collection(f.db, col), (snap) => {
-    cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })) as DemoDB[C]);
+    cb(snap.docs.map((d) => normalizeDates({ id: d.id, ...d.data() })) as DemoDB[C]);
   }, (err) => console.warn(`${col} dinlenemedi:`, err));
 }
 
