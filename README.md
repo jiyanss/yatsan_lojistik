@@ -122,3 +122,4 @@ firestore.rules   # Firestore güvenlik kuralları
 | **İzleyici (izleyici)** | Yalnızca görüntüleme |
 
 V3
+v4
