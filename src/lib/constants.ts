@@ -51,6 +51,13 @@ export const GOREV_TIP: Record<GorevTip, string> = {
   HAT: 'Sabit hat', CAGRI: 'İstasyon çağrısı',
 };
 
+/** Şoför vardiya kayıtları (mola / bekleme) etiketleri */
+export const MOLA_TIP: Record<string, string> = {
+  YEMEK: 'Yemek molası',
+  CAY: 'Çay molası',
+  BEKLEME: 'Bekleme',
+};
+
 /** Şoförün panelde bastığı pinler */
 export const PIN_LABEL: Record<PinTip, string> = {
   ATANDI: 'Görev atandı',

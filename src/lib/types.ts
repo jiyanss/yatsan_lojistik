@@ -50,8 +50,30 @@ export interface Vehicle {
   sabitFromId?: string | null;
   /** Sabit hat: araç sürekli bu istasyona boşaltır */
   sabitToId?: string | null;
+  /** Şoför vardiya kayıtları — tarih → mola/bekleme/paydos (yazan: şoför paneli) */
+  gunluk?: Record<string, GunlukKaydi>;
   note?: string;
   createdAt?: string;
+}
+
+/* ---------------- Vardiya kayıtları (mola / bekleme / paydos) ---------------- */
+export type MolaTip = 'YEMEK' | 'CAY' | 'BEKLEME';
+
+/** Tek bir mola/bekleme kaydı: b=başlangıç ISO, t=bitiş ISO (null → sürüyor) */
+export interface MolaKaydi {
+  tip: MolaTip;
+  b: string;
+  t?: string | null;
+  /** BEKLEME için: hangi istasyonda bekliyor */
+  ist?: string | null;
+  /** BEKLEME için: dolu mu boş mu bekliyor */
+  dolu?: boolean;
+}
+
+export interface GunlukKaydi {
+  molalar?: MolaKaydi[];
+  /** Paydos (işe çıkış sonu) saati — ISO */
+  paydos?: string | null;
 }
 
 /* ---------------- Görevler (şoför paneli / araç takip) ---------------- */
@@ -92,6 +114,11 @@ export interface Gorev {
   durum: GorevDurum;
   pins: GorevPin[];
   not?: string;
+  /** Talepten oluşturulduysa: kaynak talep no / malzeme / miktar */
+  requestId?: string | null;
+  talepNo?: string | null;
+  malzeme?: string | null;
+  miktar?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

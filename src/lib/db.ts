@@ -18,7 +18,7 @@ import { fbErr } from './constants';
 import { buildDemoData } from './demo-data';
 import { uid, todayISO } from './format';
 import type {
-  ColName, DemoDB, Distance, Gorev, GorevDurum, GorevPin, GorevTip, PinTip, Role,
+  ColName, DemoDB, Distance, Gorev, GorevDurum, GorevPin, GorevTip, GunlukKaydi, MolaTip, PinTip, Role,
   RoutePlan, RouteTotals, Shipment, Station, TransportRequest, UserProfile, Vehicle,
 } from './types';
 
@@ -119,6 +119,11 @@ export async function createGorev(data: {
   initialDurum?: GorevDurum;
   /** ATANDI pinine ek başlangıç pinleri (örn. DOLU_CIKTIM) */
   ekPinler?: PinTip[];
+  /** Talepten oluşturuluyorsa kaynak bilgi */
+  requestId?: string | null;
+  talepNo?: string | null;
+  malzeme?: string | null;
+  miktar?: string | null;
 }): Promise<string> {
   const now = new Date().toISOString();
   const pins: GorevPin[] = [
@@ -135,11 +140,17 @@ export async function createGorev(data: {
     soforUid: data.soforUid ?? null,
     soforAd: data.soforAd ?? null,
     not: data.not ?? null,
+    requestId: data.requestId ?? null,
+    talepNo: data.talepNo ?? null,
+    malzeme: data.malzeme ?? null,
+    miktar: data.miktar ?? null,
     durum: (data.initialDurum || 'YENI') as GorevDurum,
     pins,
     createdAt: now,
     updatedAt: now,
   };
+  // Yeni görev düşünce aracın "Beklemedeyim" kaydı otomatik kapanır (bekleme = görev gelene kadar).
+  await acikBeklemeleriKapat(data.vehicleId);
   return add('gorevler', payload as unknown as Record<string, unknown>);
 }
 
@@ -158,6 +169,27 @@ export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum,
  *     (mesafe verisi yoksa araç koduna göre ilk boşta araç)
  * Boşta araç yoksa 'BOS_YOK' döner.
  */
+/** Boşta araçlar arasından hedef istasyona en yakını seçer (mesafe verisi yoksa kod sırası). */
+function enUygunBosArac(
+  uygun: Vehicle[],
+  gorevler: Gorev[],
+  distances: Distance[],
+  routes: RoutePlan[],
+  hedefIstId: string | null | undefined,
+): Vehicle | null {
+  const boslar = uygun.filter((v) => isBosArac(v.id, gorevler));
+  if (!boslar.length) return null;
+  const kmTo = (v: Vehicle): number | null =>
+    enKisaKm(distances, routes, aracinStasyonu(v, gorevler), hedefIstId);
+  return boslar.sort((a, b) => {
+    const da = kmTo(a), dbs = kmTo(b);
+    if (da != null && dbs != null && da !== dbs) return da - dbs;
+    if (da == null && dbs != null) return 1;
+    if (da != null && dbs == null) return -1;
+    return (a.code || '').localeCompare(b.code || '', 'tr');
+  })[0] || null;
+}
+
 export async function istasyondanAracCagir(
   toStationId: string,
   vehicleIdOverride?: string | null,
@@ -167,21 +199,9 @@ export async function istasyondanAracCagir(
     list('vehicles'), list('gorevler'), list('distances'), list('routes'),
   ]);
   const uygun = (vehicles as Vehicle[]).filter((v) => v.status === 'AKTIF');
-  let secilen: Vehicle | null = null;
-  if (vehicleIdOverride) {
-    secilen = uygun.find((v) => v.id === vehicleIdOverride) || null;
-  } else {
-    const boslar = uygun.filter((v) => isBosArac(v.id, gorevler as Gorev[]));
-    const kmTo = (v: Vehicle): number | null =>
-      enKisaKm(distances as Distance[], routes as RoutePlan[], aracinStasyonu(v, gorevler as Gorev[]), toStationId);
-    secilen = boslar.sort((a, b) => {
-      const da = kmTo(a), dbs = kmTo(b);
-      if (da != null && dbs != null && da !== dbs) return da - dbs;
-      if (da == null && dbs != null) return 1;
-      if (da != null && dbs == null) return -1;
-      return (a.code || '').localeCompare(b.code || '', 'tr');
-    })[0] || null;
-  }
+  const secilen = vehicleIdOverride
+    ? uygun.find((v) => v.id === vehicleIdOverride) || null
+    : enUygunBosArac(uygun, gorevler as Gorev[], distances as Distance[], routes as RoutePlan[], toStationId);
   if (!secilen) return 'BOS_YOK';
   const sofor = await soforOfVehicle(secilen.id);
   const cikisIst = aracinStasyonu(secilen, gorevler as Gorev[]);
@@ -197,6 +217,126 @@ export async function istasyondanAracCagir(
     not: byAd ? `${byAd} tarafından çağrıldı` : null,
   });
   return { vehicleId: secilen.id };
+}
+
+/**
+ * Onaylı araç talebini şoför görevine dönüştürür:
+ *   • vehicleIdOverride verilirse o araç (yönetici manuel atama)
+ *   • verilmezse yükün ALINACAĞI istasyona (req.fromId) en yakın boşta araç otomatik seçilir
+ * Görev dolu HAT görevi olarak açılır (tam pin zinciri: dolu yola çıktım → vardım → dönüş …),
+ * talep PLANLANDI durumuna geçer ve şoför panelinde yanıp sönen uyarıyla bildirilir.
+ */
+export async function talebiGoreveDonustur(
+  req: TransportRequest,
+  vehicleIdOverride?: string | null,
+  byAd?: string,
+): Promise<{ vehicleId: string; gorevId: string } | 'BOS_YOK'> {
+  const [vehicles, gorevler, distances, routes] = await Promise.all([
+    list('vehicles'), list('gorevler'), list('distances'), list('routes'),
+  ]);
+  const uygun = (vehicles as Vehicle[]).filter((v) => v.status === 'AKTIF');
+  const secilen = vehicleIdOverride
+    ? uygun.find((v) => v.id === vehicleIdOverride) || null
+    : enUygunBosArac(uygun, gorevler as Gorev[], distances as Distance[], routes as RoutePlan[], req.fromId);
+  if (!secilen) return 'BOS_YOK';
+  const sofor = await soforOfVehicle(secilen.id);
+  const gorevId = await createGorev({
+    vehicleId: secilen.id,
+    tip: 'HAT',
+    fromId: req.fromId,
+    toId: req.toId,
+    dolu: true,
+    km: enKisaKm(distances as Distance[], routes as RoutePlan[], req.fromId, req.toId),
+    soforUid: sofor?.uid || null,
+    soforAd: sofor?.displayName || null,
+    not: `${req.no} talebi — ${req.material}${req.qty ? ` (${req.qty})` : ''}`,
+    requestId: req.id,
+    talepNo: req.no,
+    malzeme: req.material || null,
+    miktar: req.qty || null,
+  });
+  await update('requests', req.id, { status: 'PLANLANDI' });
+  void byAd;
+  return { vehicleId: secilen.id, gorevId };
+}
+
+/* ---------------- vardiya kayıtları (mola / bekleme / paydos) ---------------- */
+/** Aracın bugünkü vardiya kaydını okur-günceller; fn değişiklik yapmadıysa YAZMAZ. */
+async function gunlukGuncelle(vehicleId: string, fn: (k: GunlukKaydi) => GunlukKaydi): Promise<void> {
+  const t = todayISO();
+  if (mode === 'demo') {
+    const vs = demoRows('vehicles');
+    const v = vs.find((x) => x.id === vehicleId);
+    if (!v) return;
+    const full = { ...(v.gunluk || {}) } as Record<string, GunlukKaydi>;
+    const next = fn({ ...(full[t] || {}) });
+    if (JSON.stringify(next) === JSON.stringify(full[t] || {})) return;
+    full[t] = next;
+    v.gunluk = full;
+    saveDemo(); emitCol('vehicles');
+    return;
+  }
+  const f = fb!;
+  const ref = doc(f.db, 'vehicles', vehicleId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const full = ((snap.data().gunluk || {}) as Record<string, GunlukKaydi>) || {};
+  const next = fn({ ...(full[t] || {}) });
+  if (JSON.stringify(next) === JSON.stringify(full[t] || {})) return;
+  await setDoc(ref, { gunluk: { ...full, [t]: next } });
+}
+
+/** Yemek / çay molası başlatır (aynı tipten açık mola varsa yeniden açmaz). */
+export async function molaBaslat(vehicleId: string, tip: MolaTip): Promise<void> {
+  await gunlukGuncelle(vehicleId, (k) => {
+    const molalar = [...(k.molalar || [])];
+    if (molalar.some((m) => m.tip === tip && !m.t)) return { ...k };
+    molalar.push({ tip, b: new Date().toISOString(), t: null });
+    return { ...k, molalar };
+  });
+}
+
+/** Açık olan yemek / çay molasını bitirir. */
+export async function molaBitir(vehicleId: string, tip: MolaTip): Promise<void> {
+  const now = new Date().toISOString();
+  await gunlukGuncelle(vehicleId, (k) => ({
+    ...k,
+    molalar: (k.molalar || []).map((m) => (m.tip === tip && !m.t ? { ...m, t: now } : m)),
+  }));
+}
+
+/** Şoför "hangi istasyonda, boş/dolu beklediğini" pinler. */
+export async function beklemeyeGec(vehicleId: string, ist: string | null, dolu: boolean): Promise<void> {
+  const now = new Date().toISOString();
+  await gunlukGuncelle(vehicleId, (k) => {
+    const molalar = (k.molalar || []).map((m) => (m.tip === 'BEKLEME' && !m.t ? { ...m, t: now } : m));
+    molalar.push({ tip: 'BEKLEME', b: now, t: null, ist, dolu });
+    return { ...k, molalar };
+  });
+}
+
+/** Açık bekleme kaydını kapatır (yeni görev düşünce de otomatik çağrılır). */
+export async function beklemeyiBitir(vehicleId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await gunlukGuncelle(vehicleId, (k) => ({
+    ...k,
+    molalar: (k.molalar || []).map((m) => (m.tip === 'BEKLEME' && !m.t ? { ...m, t: now } : m)),
+  }));
+}
+
+/** Paydos: açık tüm mola/beklemeleri kapatır + gün sonu saatini yazar. */
+export async function paydosVer(vehicleId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await gunlukGuncelle(vehicleId, (k) => ({
+    ...k,
+    molalar: (k.molalar || []).map((m) => (!m.t ? { ...m, t: now } : m)),
+    paydos: now,
+  }));
+}
+
+/** Yeni görev açılırken aracın açık bekleme kaydını sessizce kapatır. */
+async function acikBeklemeleriKapat(vehicleId: string): Promise<void> {
+  try { await beklemeyiBitir(vehicleId); } catch { /* araç yoksa/erişilemezse önemli değil */ }
 }
 
 /** Araca atanmış (rolü şoför olan) kullanıcıyı bulur. */

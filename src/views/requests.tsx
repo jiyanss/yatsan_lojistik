@@ -1,13 +1,14 @@
 'use client';
 // Araç Talepleri — istasyonların araç hizmeti talepleri
+// Onaylı talep "Şoföre Ata" ile görevleştirilir: manuel araç seçimi veya en yakın boşta araç otomatik.
 import { useMemo, useState } from 'react';
-import { add, nextNo, remove, today, update } from '@/lib/db';
+import { add, nextNo, remove, today, update, talebiGoreveDonustur, enKisaKm, aracinStasyonu, isBosArac } from '@/lib/db';
 import { PRIORITY, REQ_STATUS, fbErr } from '@/lib/constants';
-import { fmtDate, matchText, upperTr } from '@/lib/format';
+import { fmtDate, fmtKm, matchText, upperTr } from '@/lib/format';
 import { exportCSV } from '@/lib/csv';
-import type { Station, TransportRequest } from '@/lib/types';
+import type { Distance, Gorev, RoutePlan, Station, TransportRequest, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
-import { EmptyState, Modal, PriorityBadge, ReqStatusBadge, confirmDialog, renderOpts } from '@/components/ui';
+import { EmptyState, Modal, Note, PriorityBadge, ReqStatusBadge, confirmDialog, renderOpts } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useCollections, useDebounced } from '@/hooks/useData';
 import type { ViewCtx } from './context';
@@ -16,7 +17,7 @@ const emptyFilters = { status: '', priority: '', station: '', from: '', to: '', 
 
 export default function RequestsView({ ctx }: { ctx: ViewCtx }) {
   const toast = useToast();
-  const data = useCollections(['requests', 'stations']);
+  const data = useCollections(['requests', 'stations', 'vehicles', 'gorevler', 'distances', 'routes']);
   const [filters, setFilters] = useState({ ...emptyFilters });
   const [qInput, setQInput] = useState('');
   const [form, setForm] = useState<TransportRequest | 'new' | null>(null);
@@ -26,6 +27,11 @@ export default function RequestsView({ ctx }: { ctx: ViewCtx }) {
 
   const requests = (data?.requests || null) as TransportRequest[] | null;
   const stations = (data?.stations || []) as Station[];
+  const vehicles = (data?.vehicles || []) as Vehicle[];
+  const gorevler = (data?.gorevler || []) as Gorev[];
+  const distances = (data?.distances || []) as Distance[];
+  const routes = (data?.routes || []) as RoutePlan[];
+  const [ataForm, setAtaForm] = useState<TransportRequest | null>(null);
 
   const sorted = useMemo(() => {
     if (!requests) return [];
@@ -146,6 +152,11 @@ export default function RequestsView({ ctx }: { ctx: ViewCtx }) {
                           {r.status === 'BEKLEMEDE' && (
                             <button className="btn sm ok" title="Onayla" onClick={() => approve(r)}><Icon name="check" size={13} /></button>
                           )}
+                          {r.status === 'ONAYLANDI' && (
+                            <button className="btn sm" title="Şoföre ata — şoför paneline görev olarak düşer" onClick={() => setAtaForm(r)}>
+                              <Icon name="truck" size={13} /> Ata
+                            </button>
+                          )}
                           <button className="btn sm secondary" title={open ? 'Düzenle' : 'Görüntüle'} onClick={() => setForm(r)}>
                             <Icon name="pencil" size={13} />
                           </button>
@@ -175,7 +186,91 @@ export default function RequestsView({ ctx }: { ctx: ViewCtx }) {
           onClose={() => setForm(null)}
         />
       )}
+
+      {ataForm && (
+        <TalepAtaModal
+          req={ataForm}
+          stations={stations}
+          vehicles={vehicles}
+          gorevler={gorevler}
+          distances={distances}
+          routes={routes}
+          onClose={() => setAtaForm(null)}
+        />
+      )}
     </>
+  );
+}
+
+/* ---------------- Talebi şoföre atama modalı ---------------- */
+function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, onClose }: {
+  req: TransportRequest;
+  stations: Station[];
+  vehicles: Vehicle[];
+  gorevler: Gorev[];
+  distances: Distance[];
+  routes: RoutePlan[];
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const [vehicleId, setVehicleId] = useState(''); // '' = en yakın boşta araç (otomatik)
+  const [busy, setBusy] = useState(false);
+  const stName = (id?: string | null) => {
+    const s = stations.find((x) => x.id === id);
+    return s ? `${s.code} · ${s.name}` : '—';
+  };
+  const aktif = vehicles.filter((v) => v.status === 'AKTIF');
+
+  async function save() {
+    setBusy(true);
+    try {
+      const r = await talebiGoreveDonustur(req, vehicleId || null);
+      if (r === 'BOS_YOK') {
+        toast('Boşta araç yok — bir görev bitince tekrar deneyin veya meşgul aracı elle seçin.', 'error');
+      } else {
+        const v = vehicles.find((x) => x.id === r.vehicleId);
+        toast(`${req.no} şoföre atandı → ${v?.code || 'araç'} — şoför panelinde uyarı görünecek`);
+        onClose();
+      }
+    } catch (e) { toast(fbErr(e), 'error'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title={`${req.no} — Şoföre Ata`} onClose={onClose}
+      footer={
+        <>
+          <button className="btn secondary" onClick={onClose}>Vazgeç</button>
+          <button className="btn" disabled={busy} onClick={save}>Görevi Düşür</button>
+        </>
+      }
+    >
+      <Note type="info">
+        Varsayılan olarak yükün alınacağı istasyona <b>en yakın boşta araç</b> otomatik seçilir;
+        istersen aşağıdan aracı <b>elle seçebilirsin</b>. Görev şoför paneline yanıp sönen uyarı + sesle bildirilir.
+      </Note>
+      <div style={{ marginTop: 10, fontSize: 13, display: 'grid', gap: 4 }}>
+        <div><b>Hat:</b> {stName(req.fromId)} → {stName(req.toId)}</div>
+        <div><b>Yük:</b> {req.material}{req.qty ? ` · ${req.qty}` : ''}{req.priority === 'ACIL' || req.priority === 'YUKSEK' ? ` · ${PRIORITY[req.priority]} öncelik` : ''}</div>
+      </div>
+      <div className="field" style={{ marginTop: 12 }}>
+        <label>Araç</label>
+        <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
+          <option value="">En yakın boşta araç (otomatik)</option>
+          {aktif.map((v) => {
+            const bos = isBosArac(v.id, gorevler);
+            const konum = aracinStasyonu(v, gorevler);
+            const km = enKisaKm(distances, routes, konum, req.fromId);
+            return <option key={v.id} value={v.id}>
+              {v.code}{v.name ? ` · ${v.name}` : ''} — {stName(konum)}{km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
+            </option>;
+          })}
+        </select>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+        Talep PLANLANDI durumuna geçer; şoför işi bitirince raporlarda tur + km olarak sayılır.
+      </div>
+    </Modal>
   );
 }
 

@@ -13,6 +13,9 @@ import { BarChart, DonutChart, HBarChart } from '@/components/charts';
 import { useCollections } from '@/hooks/useData';
 import type { ViewCtx } from './context';
 
+/** Dakika → "1s 05 dk" / "45 dk" */
+const fmtDk = (dk: number) => (dk >= 60 ? `${Math.floor(dk / 60)} sa ${String(dk % 60).padStart(2, '0')} dk` : `${dk} dk`);
+
 export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
   void ctx;
   const data = useCollections(['requests', 'routes', 'vehicles', 'stations', 'distances', 'gorevler']);
@@ -117,6 +120,36 @@ export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
 
     return { hatTur: gv.length - cagriSayi, cagriSayi, toplamKm, doluKmToplam, bosKmToplam, hatRows, vehRows };
   }, [gorevler, distances, from, to, stById, vById]);
+
+  /* ---- Vardiya: mola / bekleme / paydos süreleri (araç gunluk alanından, dakika) ---- */
+  const vardiyaAgg = useMemo(() => {
+    const nowMs = Date.now();
+    const rows = vehicles.map((v) => {
+      const gunluk = v.gunluk || {};
+      let yemek = 0, cay = 0, bekBos = 0, bekDolu = 0, gunSayi = 0;
+      let sonPaydos: string | null = null;
+      Object.entries(gunluk).forEach(([tarih, k]) => {
+        if (tarih < from || tarih > to) return;
+        gunSayi++;
+        const gunSonu = new Date(`${tarih}T23:59:59`).getTime();
+        for (const m of k.molalar || []) {
+          const b = new Date(m.b).getTime();
+          const t = m.t ? new Date(m.t).getTime() : Math.min(nowMs, gunSonu); // açık kayıt: bugünse şimdiye kadar
+          const dk = Math.max(0, Math.round((t - b) / 60000));
+          if (m.tip === 'YEMEK') yemek += dk;
+          else if (m.tip === 'CAY') cay += dk;
+          else if (m.tip === 'BEKLEME') { if (m.dolu) bekDolu += dk; else bekBos += dk; }
+        }
+        if (k.paydos && (!sonPaydos || k.paydos > sonPaydos)) sonPaydos = k.paydos;
+      });
+      return { code: v.code, gunSayi, yemek, cay, bekBos, bekDolu, sonPaydos };
+    }).filter((r) => r.gunSayi > 0).sort((a, b) => b.gunSayi - a.gunSayi);
+    const top = rows.reduce(
+      (t, r) => ({ yemek: t.yemek + r.yemek, cay: t.cay + r.cay, bekBos: t.bekBos + r.bekBos, bekDolu: t.bekDolu + r.bekDolu }),
+      { yemek: 0, cay: 0, bekBos: 0, bekDolu: 0 },
+    );
+    return { rows, top };
+  }, [vehicles, from, to]);
 
   return (
     <>
@@ -261,6 +294,57 @@ export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
               ) : (
                 <div style={{ padding: 26, textAlign: 'center', color: 'var(--faint)', fontSize: 13 }}>
                   Bu dönemde tamamlanmış sabit hat turu yok
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-head">
+              <h3>Şoför mola / bekleme / paydos</h3><span className="hint">şoför panelden atılan pinlerden</span><span className="spacer" />
+              <button className="btn sm secondary" onClick={() => exportCSV(`vardiya_${from}_${to}`,
+                ['Araç', 'Gün', 'Yemek dk', 'Çay dk', 'Bekleme boş dk', 'Bekleme dolu dk', 'Toplam dk', 'Son paydos'],
+                vardiyaAgg.rows.map((r) => [r.code, r.gunSayi, r.yemek, r.cay, r.bekBos, r.bekDolu, r.yemek + r.cay + r.bekBos + r.bekDolu, r.sonPaydos || '']))
+              }><Icon name="download" size={13} /> CSV</button>
+            </div>
+            <div className="card-body flush">
+              {vardiyaAgg.rows.length ? (
+                <div className="table-wrap"><table className="tbl">
+                  <thead><tr>
+                    <th>Araç</th><th className="num">Gün</th><th className="num">Yemek</th><th className="num">Çay</th>
+                    <th className="num">Bekleme (boş)</th><th className="num">Bekleme (dolu)</th>
+                    <th className="num">Toplam</th><th>Son paydos</th>
+                  </tr></thead>
+                  <tbody>
+                    {vardiyaAgg.rows.map((r, i) => (
+                      <tr key={i}>
+                        <td><b>{r.code}</b></td>
+                        <td className="num">{r.gunSayi}</td>
+                        <td className="num">{fmtDk(r.yemek)}</td>
+                        <td className="num">{fmtDk(r.cay)}</td>
+                        <td className="num">{fmtDk(r.bekBos)}</td>
+                        <td className="num">{fmtDk(r.bekDolu)}</td>
+                        <td className="num"><b>{fmtDk(r.yemek + r.cay + r.bekBos + r.bekDolu)}</b></td>
+                        <td>{r.sonPaydos ? new Date(r.sonPaydos).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td><b>TOPLAM</b></td>
+                      <td className="num">—</td>
+                      <td className="num"><b>{fmtDk(vardiyaAgg.top.yemek)}</b></td>
+                      <td className="num"><b>{fmtDk(vardiyaAgg.top.cay)}</b></td>
+                      <td className="num"><b>{fmtDk(vardiyaAgg.top.bekBos)}</b></td>
+                      <td className="num"><b>{fmtDk(vardiyaAgg.top.bekDolu)}</b></td>
+                      <td className="num"><b>{fmtDk(vardiyaAgg.top.yemek + vardiyaAgg.top.cay + vardiyaAgg.top.bekBos + vardiyaAgg.top.bekDolu)}</b></td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table></div>
+              ) : (
+                <div style={{ padding: 26, textAlign: 'center', color: 'var(--faint)', fontSize: 13 }}>
+                  Bu dönemde vardiya kaydı yok — şoförler panelden mola/bekleme/paydos pinledikçe burada birikir
                 </div>
               )}
             </div>

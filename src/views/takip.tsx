@@ -7,7 +7,7 @@
 // ============================================================
 import { useMemo, useState } from 'react';
 import { createGorev, enKisaKm, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
-import { fbErr, GOREV_DURUM, PIN_LABEL } from '@/lib/constants';
+import { fbErr, GOREV_DURUM, MOLA_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
 import type { Distance, Gorev, RoutePlan, UserProfile, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
@@ -41,6 +41,23 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   };
   const soforAd = (vehicleId: string) =>
     users.find((u) => u.role === 'sofor' && u.vehicleId === vehicleId)?.displayName || null;
+
+  /** Şoförün vardiya pininden: "Çay molasında", "Beklemede — X (boş)", "Paydos verdi" */
+  const vardiyaDurumYaz = (v: Vehicle): string => {
+    const k = v.gunluk?.[today()];
+    if (!k) return '';
+    const saat = (iso: string) => new Date(iso).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    const acik = (k.molalar || []).find((m) => !m.t);
+    if (acik) {
+      if (acik.tip === 'BEKLEME') {
+        const s = stations.find((x) => x.id === acik.ist);
+        return `Beklemede — ${s ? s.code : '?'} (${acik.dolu ? 'dolu' : 'boş'}) · ${saat(acik.b)}'den beri`;
+      }
+      return `${MOLA_TIP[acik.tip] || acik.tip}da · ${saat(acik.b)}'den beri`;
+    }
+    if (k.paydos) return `Paydos verdi · ${saat(k.paydos)}`;
+    return '';
+  };
 
   const openGorev = (vehicleId: string) =>
     gorevler.find((g) => g.vehicleId === vehicleId && OPEN_GOREV_DURUMLARI.includes(g.durum)) || null;
@@ -140,6 +157,11 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                       <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
                         {soforAd(v.id) ? `Şoför: ${soforAd(v.id)}` : 'Şoför ataması yok'}
                       </div>
+                      {vardiyaDurumYaz(v) && (
+                        <div style={{ fontSize: 11.5, marginTop: 3, fontWeight: 700, color: '#92400e' }}>
+                          {vardiyaDurumYaz(v)}
+                        </div>
+                      )}
                     </div>
                     {bos ? <span className="badge st-tamamlandi">Boşta</span>
                       : v.status !== 'AKTIF' ? <VehicleStatusBadge s={v.status} />
