@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { createGorev, enKisaKm, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, paydosAktif, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_DURUM, MOLA_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
+import { gorevTalepMi, seferBiten, seferToplam } from '@/lib/types';
 import type { Distance, Gorev, RoutePlan, UserProfile, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
 import { EmptyState, GorevDurumBadge, GorevTipBadge, Modal, VehicleStatusBadge, Note, confirmDialog, renderOpts } from '@/components/ui';
@@ -124,6 +125,8 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
         Şoförler mobil panellerinden pinleri basar: <b>Dolu yola çıktım → Vardım dolu → Hedef istasyona yola çıktım →
         Hedef istasyona vardım → Yükleme tamam</b>; durumlar burada anında görünür. İstasyon bir araç istediğinde görev
         <b> çağıran istasyona en yakın boşta araca</b> otomatik düşer; dilerseniz aracı elle de seçebilirsiniz.
+        <b> Talep seferlerinde</b> (araç taleplerinden atanan işler) şoför belirlenen sayıda "yük al → götür → bırak"
+        yapar: <b>son seferin indirmesiyle görev ve talep otomatik Tamamlandı</b> olur, araç teslim istasyonunda boşta kalır.
         {bozukAracVar && <> <b style={{ color: '#b45309' }}>Dikkat:</b> kodu boş görünen araçlar eski bir yazım hatasından
         bozulmuştur — <b>Araçlar</b> sayfasından Düzenle ile bilgilerini yeniden girin (aynı kayıt onarılır, geçmiş bağlantıları korunur).</>}
       </Note>
@@ -186,7 +189,14 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                   {g && (
                     <div style={{ marginTop: 10, background: 'var(--bg-soft, #f6f8fb)', borderRadius: 10, padding: '9px 11px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, marginBottom: 5 }}>
-                        <GorevTipBadge t={g.tip} />
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <GorevTipBadge t={g.tip} talep={gorevTalepMi(g)} />
+                          {gorevTalepMi(g) && (
+                            <span className="badge" style={{ background: '#e0f2fe', color: '#075985', fontWeight: 800, fontSize: 11 }}>
+                              Sefer {Math.min(seferBiten(g) + 1, seferToplam(g))}/{seferToplam(g)}
+                            </span>
+                          )}
+                        </div>
                         {kmOf(g) != null && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{fmtKm(kmOf(g))}</span>}
                       </div>
                       <div style={{ fontSize: 13.5, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -259,7 +269,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                     <tr key={g.id}>
                       <td><b>{v?.code || '—'}</b></td>
                       <td>{g.tip === 'CAGRI' ? `${stName(g.toId)} çağrısı` : `${stName(g.fromId)} → ${stName(g.toId)}`}</td>
-                      <td><GorevTipBadge t={g.tip} /></td>
+                      <td><GorevTipBadge t={g.tip} talep={gorevTalepMi(g)} /></td>
                       <td><GorevDurumBadge s={g.durum} /></td>
                       <td style={{ fontSize: 12 }}>{lastPin ? PIN_LABEL[lastPin.tip] || lastPin.tip : '—'}</td>
                       <td style={{ color: 'var(--muted)' }}>{lastPin ? fmtDT(lastPin.at) : '—'}</td>

@@ -21,6 +21,7 @@ import type {
   ColName, DemoDB, Distance, Gorev, GorevDurum, GorevPin, GorevTip, GunlukKaydi, MolaTip, PinTip, Role,
   RoutePlan, RouteTotals, Shipment, Station, TransportRequest, UserProfile, Vehicle,
 } from './types';
+import { gorevSonIst, seferToplam } from './types';
 
 export const COLS: ColName[] = ['users', 'stations', 'distances', 'vehicles', 'requests', 'routes', 'shipments', 'gorevler'];
 const DEMO_KEY = 'yatsan_il_db_v1';
@@ -92,17 +93,24 @@ export function isBosArac(vehicleId: string, gorevler: Gorev[]): boolean {
 
 /**
  * Aracın şu an hangi istasyonda olduğunu tahmin eder:
- *   • Açık görevi varsa → görevin ilgili istasyonu (YENI'de yükleme, yolda/dönüşte varış noktası)
- *   • Boşta ise → sabit hattının yükleme istasyonu, o da yoksa son görevinin varış noktası
+ *   • Açık görevi varsa → görevin ilgili istasyonu (YENI'de yükleme, yolda/dönüşte varış noktası,
+ *     HAT görevinde ISTASYONDA = yükleme istasyonuna dönmüş demektir)
+ *   • Boşta ise → SON TAMAMLANAN görevin bittiği istasyon ("son kaldığı istasyon"),
+ *     hiç görev geçmişi yoksa sabit hattının yükleme istasyonu
  */
 export function aracinStasyonu(v: Vehicle, gorevler: Gorev[]): string | null {
   const open = gorevler.find((g) => g.vehicleId === v.id && OPEN_GOREV_DURUMLARI.includes(g.durum));
-  if (open) return open.durum === 'YENI' ? (open.fromId || open.toId || null) : (open.toId || open.fromId || null);
-  if (v.sabitFromId) return v.sabitFromId;
+  if (open) {
+    if (open.durum === 'YENI') return open.fromId || open.toId || null;
+    if (open.durum === 'ISTASYONDA')
+      return open.tip === 'CAGRI' ? (open.toId || open.fromId || null) : (open.fromId || open.toId || null);
+    return open.toId || open.fromId || null;
+  }
   const son = (gorevler || [])
     .filter((g) => g.vehicleId === v.id && g.durum === 'TAMAMLANDI')
     .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))[0];
-  return son?.toId || null;
+  // Boşta araç son kaldığı istasyondadır — sabit hat istasyonu yalnızca görev geçmişi yoksa varsayılır.
+  return (son && gorevSonIst(son)) || v.sabitFromId || null;
 }
 
 export async function createGorev(data: {
@@ -124,6 +132,8 @@ export async function createGorev(data: {
   talepNo?: string | null;
   malzeme?: string | null;
   miktar?: string | null;
+  /** Talep seferi: yapılacak toplam sefer (varsayılan 1) */
+  seferSayisi?: number | null;
 }): Promise<string> {
   const now = new Date().toISOString();
   const pins: GorevPin[] = [
@@ -144,6 +154,8 @@ export async function createGorev(data: {
     talepNo: data.talepNo ?? null,
     malzeme: data.malzeme ?? null,
     miktar: data.miktar ?? null,
+    seferSayisi: seferToplam({ seferSayisi: data.seferSayisi }),
+    bitenSefer: 0,
     durum: (data.initialDurum || 'YENI') as GorevDurum,
     pins,
     createdAt: now,
@@ -167,6 +179,33 @@ export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum,
   }
   if (gorev.requestId && yeniDurum === 'IPTAL') {
     try { await update('requests', gorev.requestId, { status: 'ONAYLANDI' }); } catch { /* yoksay */ }
+  }
+}
+
+/**
+ * Talep seferi tamamlandı: bitenSefer artar.
+ *   • Son seferse görev TAMAMLANDI olur → araç o istasyonda (toId) boşta kalır,
+ *     kaynak talep de otomatik TAMAMLANDI'ya geçer.
+ *   • Ara seferse görev DONUS_YOLDA'ya döner (boş dönüş → yeniden yükleme → sıradaki sefer).
+ */
+export async function seferTamamla(gorev: Gorev, byAd?: string): Promise<void> {
+  if (!gorev.id) throw new Error('Görev kimliği yok.');
+  const now = new Date().toISOString();
+  const biten = Math.round(Number(gorev.bitenSefer) || 0) + 1;
+  const toplam = seferToplam(gorev);
+  const sonSefer = biten >= toplam;
+  const pins: GorevPin[] = [
+    ...(gorev.pins || []),
+    { tip: sonSefer ? 'TAMAM' : 'DONUS_CIKTIM', at: now, by: byAd || gorev.soforAd || 'Sistem' },
+  ];
+  await update('gorevler', gorev.id, {
+    bitenSefer: biten,
+    durum: (sonSefer ? 'TAMAMLANDI' : 'DONUS_YOLDA') as GorevDurum,
+    pins,
+    updatedAt: now,
+  });
+  if (sonSefer && gorev.requestId) {
+    try { await update('requests', gorev.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
   }
 }
 
@@ -231,13 +270,16 @@ export async function istasyondanAracCagir(
  * Onaylı araç talebini şoför görevine dönüştürür:
  *   • vehicleIdOverride verilirse o araç (yönetici manuel atama)
  *   • verilmezse yükün ALINACAĞI istasyona (req.fromId) en yakın boşta araç otomatik seçilir
- * Görev dolu HAT görevi olarak açılır (tam pin zinciri: dolu yola çıktım → vardım → dönüş …),
- * talep PLANLANDI durumuna geçer ve şoför panelinde yanıp sönen uyarıyla bildirilir.
+ * Görev TALEP SEFERİ olarak açılır: şoför seferSayisi kadar "yük al → götür → bırak" yapar.
+ * Son seferin indirmesiyle görev (ve talep) otomatik TAMAMLANDI olur; araç teslim istasyonunda
+ * ("son kaldığı istasyon") boşta kalır — ayrıca dönüş pini basması gerekmez.
+ * Talep PLANLANDI durumuna geçer; şoför panelinde yanıp sönen uyarıyla bildirilir.
  */
 export async function talebiGoreveDonustur(
   req: TransportRequest,
   vehicleIdOverride?: string | null,
   byAd?: string,
+  seferSayisi?: number | null,
 ): Promise<{ vehicleId: string; gorevId: string } | 'BOS_YOK'> {
   const [vehicles, gorevler, distances, routes] = await Promise.all([
     list('vehicles'), list('gorevler'), list('distances'), list('routes'),
@@ -262,6 +304,7 @@ export async function talebiGoreveDonustur(
     talepNo: req.no,
     malzeme: req.material || null,
     miktar: req.qty || null,
+    seferSayisi: seferSayisi ?? 1,
   });
   await update('requests', req.id, { status: 'PLANLANDI' });
   void byAd;

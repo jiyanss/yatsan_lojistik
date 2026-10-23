@@ -121,13 +121,69 @@ export interface Gorev {
   talepNo?: string | null;
   malzeme?: string | null;
   miktar?: string | null;
+  /** Talep görevinde şoförün yapacağı toplam sefer sayısı (1 = tek gidiş-gelişsiz iş) */
+  seferSayisi?: number | null;
+  /** Tamamlanan sefer sayısı (ara seferler boş dönüşle tamamlanır) */
+  bitenSefer?: number | null;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Görevin toplam sefer sayısı (1'in altına düşmez) */
+export function seferToplam(g: Pick<Gorev, 'seferSayisi'>): number {
+  const n = Math.round(Number(g.seferSayisi) || 1);
+  return Math.max(1, n || 1);
+}
+
+/** Tamamlanan sefer sayısı — görev kapandıysa en az toplam kadar sayılır */
+export function seferBiten(g: Pick<Gorev, 'bitenSefer' | 'durum' | 'seferSayisi'>): number {
+  const b = Math.round(Number(g.bitenSefer) || 0);
+  return g.durum === 'TAMAMLANDI' ? Math.max(b, seferToplam(g)) : b;
+}
+
+/** Sıradaki sefer tamamlanınca görev biter mi? */
+export function seferSonMu(g: Pick<Gorev, 'bitenSefer' | 'seferSayisi'>): boolean {
+  return (Math.round(Number(g.bitenSefer) || 0) + 1) >= seferToplam(g);
+}
+
+/**
+ * Tamamlanan görevin sonunda aracın kaldığı istasyon ("son kaldığı istasyon"):
+ * son konum pinine göre çözülür — 1 seferlik talep işinde hedef istasyon,
+ * boş dönüşle kapanan sabit hat turunda yükleme istasyonu, çağrıda çağrılan istasyon.
+ */
+export function gorevSonIst(g: Pick<Gorev, 'tip' | 'fromId' | 'toId' | 'pins'>): string | null {
+  const pins = g.pins || [];
+  for (let i = pins.length - 1; i >= 0; i--) {
+    const t = pins[i].tip;
+    if (t === 'VARDIM_DOLU' || t === 'VARDIM_BOS') return g.toId || g.fromId || null;
+    if (t === 'HEDEF_VARDIM' || t === 'ISTASYONDA')
+      return g.tip === 'CAGRI' ? (g.toId || g.fromId || null) : (g.fromId || g.toId || null);
+    if (t === 'DONUS_CIKTIM') return g.fromId || g.toId || null;
+    if (t === 'DOLU_CIKTIM' || t === 'CIKTIM') return g.toId || g.fromId || null;
+  }
+  return gorevDonusVar(g) ? (g.fromId || g.toId || null) : (g.toId || g.fromId || null);
+}
+
+/**
+ * Görevin tahmini kat ettiği mesafe (metre): çok seferli talep görevinde
+ * N dolu bacak + (N−1) boş dönüş bacağı; tek seferde dolu/boş durumuna göre tek yön × (dönüş varsa 2).
+ */
+export function gorevKm(g: Pick<Gorev, 'dolu' | 'seferSayisi' | 'pins'>, tekYonM: number | null): { dolu: number; bos: number } {
+  if (tekYonM == null || !isFinite(tekYonM)) return { dolu: 0, bos: 0 };
+  const n = seferToplam(g);
+  if (n > 1) return { dolu: tekYonM * n, bos: tekYonM * (n - 1) };
+  // Boş hareketin gidiş bacağı da boş km'dir (+ dönüş bacağı varsa o da)
+  return { dolu: g.dolu ? tekYonM : 0, bos: (g.dolu ? 0 : tekYonM) + (gorevDonusVar(g) ? tekYonM : 0) };
 }
 
 /** Görev pinlerinden dönüş bacağı (boş dönüş) yapılmış mı? */
 export function gorevDonusVar(g: Pick<Gorev, 'pins'>): boolean {
   return (g.pins || []).some((p) => p.tip === 'DONUS_CIKTIM' || p.tip === 'HEDEF_VARDIM');
+}
+
+/** Talepten türemiş görev mi? (rozet "Talep seferi" olarak gösterilir) */
+export function gorevTalepMi(g: Pick<Gorev, 'requestId' | 'talepNo'>): boolean {
+  return !!g.requestId || !!g.talepNo;
 }
 
 export type ReqStatus = 'BEKLEMEDE' | 'ONAYLANDI' | 'PLANLANDI' | 'TAMAMLANDI' | 'IPTAL';

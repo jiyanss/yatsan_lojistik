@@ -6,7 +6,7 @@ import { computeRoute, distanceBetween, today } from '@/lib/db';
 import { ROUTE_STATUS } from '@/lib/constants';
 import { addDaysISO, fmtDate, fmtKm } from '@/lib/format';
 import { exportCSV } from '@/lib/csv';
-import { gorevDonusVar } from '@/lib/types';
+import { gorevKm } from '@/lib/types';
 import type { Distance, Gorev, RoutePlan, Station, TransportRequest, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
 import { BarChart, DonutChart, HBarChart } from '@/components/charts';
@@ -90,9 +90,10 @@ export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
 
     for (const g of gv) {
       const km = distanceBetween(distances, g.fromId, g.toId);
-      const donus = gorevDonusVar(g); // pinlerinde dönüş bacağı var mı?
-      const doluKm = g.dolu && km != null ? km : 0;
-      const bosKm = km != null ? (g.dolu ? 0 : km) + (donus ? km : 0) : 0;
+      // Çok seferli talep görevinde N dolu bacak + (N−1) boş dönüş bacağı; tek seferde dolu/boş + dönüş pinine göre
+      const k = gorevKm(g, km);
+      const doluKm = k.dolu;
+      const bosKm = k.bos;
       toplamKm += doluKm + bosKm;
       doluKmToplam += doluKm;
       bosKmToplam += bosKm;

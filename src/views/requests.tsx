@@ -214,6 +214,7 @@ function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, o
 }) {
   const toast = useToast();
   const [vehicleId, setVehicleId] = useState(''); // '' = en yakın boşta araç (otomatik)
+  const [sefer, setSefer] = useState(1);
   const [busy, setBusy] = useState(false);
   const stName = (id?: string | null) => {
     const s = stations.find((x) => x.id === id);
@@ -224,12 +225,12 @@ function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, o
   async function save() {
     setBusy(true);
     try {
-      const r = await talebiGoreveDonustur(req, vehicleId || null);
+      const r = await talebiGoreveDonustur(req, vehicleId || null, undefined, sefer);
       if (r === 'BOS_YOK') {
         toast('Boşta araç yok — bir görev bitince tekrar deneyin veya meşgul aracı elle seçin.', 'error');
       } else {
         const v = vehicles.find((x) => x.id === r.vehicleId);
-        toast(`${req.no} şoföre atandı → ${v?.code || 'araç'} — şoför panelinde uyarı görünecek`);
+        toast(`${req.no} şoföre atandı → ${v?.code || 'araç'} (${sefer} sefer) — şoför panelinde uyarı görünecek`);
         onClose();
       }
     } catch (e) { toast(fbErr(e), 'error'); }
@@ -267,9 +268,22 @@ function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, o
           })}
         </select>
       </div>
+      <div className="field">
+        <label>Kaç sefer yapacak? <span className="req">*</span></label>
+        <select value={sefer} onChange={(e) => setSefer(Number(e.target.value))}>
+          {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => (
+            <option key={n} value={n}>{n} sefer{n === 1 ? ' (tek gidiş — varsayılan)' : ''}</option>
+          ))}
+        </select>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>
+          1 sefer = yük bir kez alınır ve teslim edilir. Araç tek kapasitesiyle yetmiyorsa (örn. 12 palet,
+          araçta 4 palet) sefer sayısını artırın.
+        </div>
+      </div>
       <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-        Talep PLANLANDI durumuna geçer; şoför işi bitirince (&quot;İş bitti&quot; pini) talep otomatik
-        <b> Tamamlandı</b> olur ve raporlarda tur + km olarak sayılır.
+        <b style={{ color: '#166534' }}>Son seferin indirmesiyle</b> görev ve talep <b>otomatik Tamamlandı</b> olur —
+        ayrıca bir şey basmak gerekmez — ve araç <b>teslim istasyonunda (son kaldığı yer) boşta</b> kalır; sonraki
+        çağrılar o konumdan hesaplanır. Ara seferlerde şoför boş dönüp yeniden yükler.
       </div>
     </Modal>
   );
