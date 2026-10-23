@@ -237,6 +237,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
           onClose={() => setGorevVer(null)}
           stations={stations}
           users={users}
+          distances={distances}
         />
       )}
     </>
@@ -300,11 +301,12 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, busy, on
 }
 
 /* ---------------- Araca görev verme (sabit hat) ---------------- */
-function GorevVerModal({ v, onClose, stations, users }: {
+function GorevVerModal({ v, onClose, stations, users, distances }: {
   v: Vehicle;
   onClose: () => void;
   stations: { id: string; code: string; name: string }[];
   users: (UserProfile & { uid: string })[];
+  distances: Distance[];
 }) {
   const toast = useToast();
   const [fromId, setFromId] = useState(v.sabitFromId || '');
@@ -321,6 +323,7 @@ function GorevVerModal({ v, onClose, stations, users }: {
     try {
       await createGorev({
         vehicleId: v.id, tip: 'HAT', fromId, toId, dolu,
+        km: distanceBetween(distances, fromId, toId),
         soforUid: sofor?.uid || null, soforAd: sofor?.displayName || null,
         not: `${atayan} atadı`,
       });

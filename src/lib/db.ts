@@ -14,6 +14,7 @@ import {
   onSnapshot, query, serverTimestamp, setDoc, writeBatch,
 } from 'firebase/firestore';
 import { ensureFirebase, getFirebaseConfig, isFirebaseConfigured, type FbContext } from './firebase';
+import { fbErr } from './constants';
 import { buildDemoData } from './demo-data';
 import { uid, todayISO } from './format';
 import type {
@@ -113,7 +114,7 @@ export async function createGorev(data: {
   km?: number | null;
   soforUid?: string | null;
   soforAd?: string | null;
-  not?: string;
+  not?: string | null;
   /** Tur zincirinde şoför yola çıkmış olarak açılır (YOLDA) */
   initialDurum?: GorevDurum;
   /** ATANDI pinine ek başlangıç pinleri (örn. DOLU_CIKTIM) */
@@ -127,13 +128,13 @@ export async function createGorev(data: {
   const payload = {
     vehicleId: data.vehicleId,
     tip: data.tip,
-    fromId: data.fromId,
-    toId: data.toId,
-    dolu: data.dolu,
-    km: data.km,
-    soforUid: data.soforUid,
-    soforAd: data.soforAd,
-    not: data.not,
+    fromId: data.fromId ?? null,
+    toId: data.toId ?? null,
+    dolu: data.dolu ?? false,
+    km: data.km ?? null,
+    soforUid: data.soforUid ?? null,
+    soforAd: data.soforAd ?? null,
+    not: data.not ?? null,
     durum: (data.initialDurum || 'YENI') as GorevDurum,
     pins,
     createdAt: now,
@@ -183,14 +184,17 @@ export async function istasyondanAracCagir(
   }
   if (!secilen) return 'BOS_YOK';
   const sofor = await soforOfVehicle(secilen.id);
+  const cikisIst = aracinStasyonu(secilen, gorevler as Gorev[]);
   await createGorev({
     vehicleId: secilen.id,
     tip: 'CAGRI',
+    fromId: cikisIst,
     toId: toStationId,
     dolu: false,
+    km: distanceBetween(distances as Distance[], cikisIst, toStationId),
     soforUid: sofor?.uid || null,
     soforAd: sofor?.displayName || null,
-    not: byAd ? `${byAd} tarafından çağrıldı` : undefined,
+    not: byAd ? `${byAd} tarafından çağrıldı` : null,
   });
   return { vehicleId: secilen.id };
 }
@@ -211,7 +215,7 @@ export async function soforOfVehicle(vehicleId: string): Promise<UserProfile | n
  */
 export async function adminCreateUser(p: {
   email: string; password: string; displayName: string; role: Role; vehicleId?: string | null;
-}): Promise<{ uid: string; profileOk: boolean }> {
+}): Promise<{ uid: string; profileOk: boolean; profileErr?: string }> {
   const email = (p.email || '').trim();
   if (!email || !/\S+@\S+\.\S+$/.test(email)) throw new Error('Geçerli bir e-posta girin.');
   if (!p.password || p.password.length < 6) throw new Error('Şifre en az 6 karakter olmalı.');
@@ -234,16 +238,38 @@ export async function adminCreateUser(p: {
     const cred = await createUserWithEmailAndPassword(getAuth(app2), email, p.password);
     try { if (p.displayName) await updateProfile(cred.user, { displayName: p.displayName }); } catch { /* önemsiz */ }
     let profileOk = true;
-    try {
+    let profileErr = '';
+    // Profil yazımı ANA uygulama (yönetici oturumu) üzerinden yapılır.
+    // Kurallar yeni publish edildiyse bile geçici reddetmeler olabilir — 1 kez retry + doğrulama.
+    const profilYaz = async (): Promise<void> => {
       await setDoc(doc(f.db, 'users', cred.user.uid), {
         email: cred.user.email, displayName: p.displayName || email.split('@')[0],
         role: p.role, vehicleId: p.vehicleId || null, createdAt: serverTimestamp(),
       });
-    } catch {
-      // Kurallar eskiyse profil yazılamayabilir — kullanıcı ilk girişinde kendiliğinden oluşur.
-      profileOk = false;
+    };
+    try {
+      await profilYaz();
+    } catch (e) {
+      await new Promise((r) => setTimeout(r, 900)); // kurallar/kimlik token'ı için kısa bekleme
+      try {
+        await profilYaz();
+      } catch (e2) {
+        // Yazım yine de reddedildiyse belki gerçekten yazılmıştır (yanıt kaybolmuş) — doğrula.
+        try {
+          const snap = await getDoc(doc(f.db, 'users', cred.user.uid));
+          if (snap.exists()) {
+            profileOk = true;
+          } else {
+            profileOk = false;
+            profileErr = fbErr(e2);
+          }
+        } catch {
+          profileOk = false;
+          profileErr = fbErr(e2);
+        }
+      }
     }
-    return { uid: cred.user.uid, profileOk };
+    return { uid: cred.user.uid, profileOk, profileErr };
   } finally {
     try { await deleteApp(app2); } catch { /* yoksay */ }
   }
@@ -382,8 +408,25 @@ export async function list<C extends ColName>(col: C): Promise<DemoDB[C]> {
   return snap.docs.map((d) => normalizeDates({ id: d.id, ...d.data() })) as DemoDB[C];
 }
 
+/**
+ * Firestore'da `undefined` alan DEĞERİ yasaktır ("Unsupported field value: undefined").
+ * Göndermeden önce tüm undefined'ları (nested nesne/dizi dahil) temizler —
+ * böylece herhangi bir ekranda eksik alan unutulsa bile yazım asla patlamaz.
+ */
+function cleanUndefined<T>(v: T): T {
+  if (Array.isArray(v)) return v.map((x) => cleanUndefined(x)) as unknown as T;
+  if (v && typeof v === 'object' && !(v instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (val !== undefined) out[k] = cleanUndefined(val);
+    }
+    return out as unknown as T;
+  }
+  return v;
+}
+
 export async function add<C extends ColName>(col: C, data: Record<string, unknown>, explicitId: string | null = null): Promise<string> {
-  const d = { ...data };
+  const d = cleanUndefined({ ...data });
   if (mode === 'demo') {
     (d as { id?: string }).id = explicitId || uid();
     if (!d.createdAt) (d as { createdAt?: string }).createdAt = new Date().toISOString();
@@ -414,7 +457,7 @@ export async function update(col: ColName, id: string, patch: Record<string, unk
     return;
   }
   const f = fb!;
-  const p = { ...patch };
+  const p = cleanUndefined({ ...patch });
   delete p.id;
   await setDoc(doc(f.db, col, id), p, { merge: true });
 }

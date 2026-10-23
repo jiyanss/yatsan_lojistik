@@ -84,6 +84,7 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
       await createGorev({
         vehicleId: g.vehicleId, tip: 'HAT',
         fromId: g.fromId, toId: g.toId, dolu: true,
+        km: kmOf(g),
         soforUid: g.soforUid || user.uid, soforAd: g.soforAd || user.displayName,
         not: 'Tur zinciri — yükleme tamam, dolu yola çıkıldı',
         initialDurum: 'YOLDA', ekPinler: ['DOLU_CIKTIM'],
@@ -100,7 +101,7 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
       await createGorev({
         vehicleId: vehicle.id, tip: 'HAT',
         fromId: vehicle.sabitFromId, toId: vehicle.sabitToId,
-        dolu, soforUid: user.uid, soforAd: user.displayName,
+        dolu, km: hatKm, soforUid: user.uid, soforAd: user.displayName,
       });
       toast(dolu ? 'Dolu tur açıldı — yola çıkınca "Dolu yola çıktım" pinini atın' : 'Boş tur açıldı');
     } catch (e) { toast(fbErr(e), 'error'); }

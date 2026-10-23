@@ -178,7 +178,7 @@ function YeniKullaniciModal({ vehicles, onClose }: { vehicles: Vehicle[]; onClos
       if (r.profileOk) {
         toast(`${f.ad || f.email} eklendi${f.rol === 'sofor' ? ' — şoför paneline girebilir' : ''}`);
       } else {
-        toast('Kullanıcı oluşturuldu ancak profil yazılamadı. Kullanıcı ilk girişinde profil oluşur; sonra buradan rol/araç atayın. (Firebase kurallarını Ayarlar sayfasından güncelleyin.)', 'error');
+        toast(`Kullanıcı oluşturuldu ancak profil yazılamadı (${r.profileErr || 'neden bilinmiyor'}). Kullanıcı ilk girişinde profil oluşturur; sonra buradan rol/araç atayın. (Firebase kurallarını Ayarlar sayfasından kopyalayıp Console → Firestore → Rules'a yapıştırıp Publish edin.)`, 'error');
       }
       onClose();
     } catch (e) {
