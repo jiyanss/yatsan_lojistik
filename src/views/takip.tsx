@@ -6,7 +6,7 @@
 //   • İstasyon ihtiyacında görev, çağıran istasyona EN YAKIN boşta araca otomatik düşer (veya yönetici elle atar)
 // ============================================================
 import { useMemo, useState } from 'react';
-import { createGorev, enKisaKm, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
+import { createGorev, enKisaKm, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, paydosAktif, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_DURUM, MOLA_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
 import type { Distance, Gorev, RoutePlan, UserProfile, Vehicle } from '@/lib/types';
@@ -42,7 +42,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   const soforAd = (vehicleId: string) =>
     users.find((u) => u.role === 'sofor' && u.vehicleId === vehicleId)?.displayName || null;
 
-  /** Şoförün vardiya pininden: "Çay molasında", "Beklemede — X (boş)", "Paydos verdi" */
+  /** Şoförün vardiya pininden: "Çay molasında", "Beklemede — X (boş)", "Paydos verdi", "İş başı yaptı" */
   const vardiyaDurumYaz = (v: Vehicle): string => {
     const k = v.gunluk?.[today()];
     if (!k) return '';
@@ -55,7 +55,8 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
       }
       return `${MOLA_TIP[acik.tip] || acik.tip}da · ${saat(acik.b)}'den beri`;
     }
-    if (k.paydos) return `Paydos verdi · ${saat(k.paydos)}`;
+    if (paydosAktif(k)) return `Paydos verdi · ${saat(k.paydos!)}`;
+    if (k.isbasi && (!k.paydos || k.isbasi > k.paydos)) return `İş başı yaptı · ${saat(k.isbasi)}`;
     return '';
   };
 
@@ -72,6 +73,11 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   }
 
   const aktif = sorted.filter((v) => v.status === 'AKTIF');
+  // Görevi görünmeyen şoförler: hesabına araç atanmamış (veya atanmış araç kaydı bozulmuş) şoförler
+  // araç kartlarında hiç yer almadığı için burada ayrıca listelenir — yoksa "sistem görmüyor" sanılır.
+  const sahipsizSoforler = users.filter((u) =>
+    u.role === 'sofor' && (!u.vehicleId || !vehicles.some((v) => v.id === u.vehicleId)));
+  const bozukAracVar = vehicles.some((v) => !v.code);
   const bosSayi = aktif.filter((v) => isBosArac(v.id, gorevler)).length;
   const yoldaSayi = aktif.filter((v) => ['YOLDA', 'DONUS_YOLDA'].includes(openGorev(v.id)?.durum || '')).length;
   const istasyondaSayi = aktif.filter((v) => ['ISTASYONDA', 'BEKLIYOR'].includes(openGorev(v.id)?.durum || '')).length;
@@ -118,6 +124,8 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
         Şoförler mobil panellerinden pinleri basar: <b>Dolu yola çıktım → Vardım dolu → Hedef istasyona yola çıktım →
         Hedef istasyona vardım → Yükleme tamam</b>; durumlar burada anında görünür. İstasyon bir araç istediğinde görev
         <b> çağıran istasyona en yakın boşta araca</b> otomatik düşer; dilerseniz aracı elle de seçebilirsiniz.
+        {bozukAracVar && <> <b style={{ color: '#b45309' }}>Dikkat:</b> kodu boş görünen araçlar eski bir yazım hatasından
+        bozulmuştur — <b>Araçlar</b> sayfasından Düzenle ile bilgilerini yeniden girin (aynı kayıt onarılır, geçmiş bağlantıları korunur).</>}
       </Note>
 
       <div className="toolbar">
@@ -151,7 +159,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                     <div>
                       <div style={{ fontWeight: 800, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
-                        <Icon name="truck" size={15} />{v.code}
+                        <Icon name="truck" size={15} />{v.code || <span style={{ color: '#b45309' }}>(kod yok)</span>}
                         <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: 12 }}>{v.name}</span>
                       </div>
                       <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
@@ -208,6 +216,27 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {sahipsizSoforler.length > 0 && (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="card-body" style={{ padding: '12px 14px' }}>
+            <div style={{ fontWeight: 800, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Icon name="users" size={15} /> Araç atanmamış şoförler ({sahipsizSoforler.length})
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', margin: '5px 0 9px' }}>
+              Bu şoförlerin hiçbir görevi görünmez çünkü hesaplarına araç atanmamış (veya atanmış olan aracın kaydı bozulmuş).
+              <b> Kullanıcılar</b> sayfasından araç atayın — atanınca yukarıda kart olarak görünür.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {sahipsizSoforler.map((u) => (
+                <span key={u.uid} className="badge st-beklemede" style={{ fontSize: 12 }}>
+                  {u.displayName || u.email}{u.vehicleId ? ' · aracı bozuk' : ' · araç yok'}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

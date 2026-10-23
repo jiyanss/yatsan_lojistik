@@ -74,6 +74,8 @@ export interface GunlukKaydi {
   molalar?: MolaKaydi[];
   /** Paydos (işe çıkış sonu) saati — ISO */
   paydos?: string | null;
+  /** "İş başı yaptım" pini — paydosu kaldırır; ayrıca paydos sabah 08:00'de otomatik düşer */
+  isbasi?: string | null;
 }
 
 /* ---------------- Görevler (şoför paneli / araç takip) ---------------- */

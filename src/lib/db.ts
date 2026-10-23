@@ -160,6 +160,14 @@ export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum,
   const now = new Date().toISOString();
   const pins: GorevPin[] = [...(gorev.pins || []), { tip, at: now, by: byAd || gorev.soforAd || 'Sistem' }];
   await update('gorevler', gorev.id, { durum: yeniDurum, pins, updatedAt: now });
+  // Kaynak talebi senkronla: görev TAMAMLANDI olunca talep de TAMAMLANDI olur,
+  // görev İPTAL olunca talep yeniden atanabilir (ONAYLANDI) duruma döner.
+  if (gorev.requestId && yeniDurum === 'TAMAMLANDI') {
+    try { await update('requests', gorev.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
+  }
+  if (gorev.requestId && yeniDurum === 'IPTAL') {
+    try { await update('requests', gorev.requestId, { status: 'ONAYLANDI' }); } catch { /* yoksay */ }
+  }
 }
 
 /**
@@ -283,7 +291,10 @@ async function gunlukGuncelle(vehicleId: string, fn: (k: GunlukKaydi) => GunlukK
   const full = ((snap.data().gunluk || {}) as Record<string, GunlukKaydi>) || {};
   const next = fn({ ...(full[t] || {}) });
   if (JSON.stringify(next) === JSON.stringify(full[t] || {})) return;
-  await setDoc(ref, { gunluk: { ...full, [t]: next } });
+  // ⚠️ merge:true ZORUNLU — merge'siz setDoc dokümanın TÜM diğer alanlarını (kod, ad,
+  // tip, sabit hat, durum…) siler; bu hata yüzünden araç kayıtları "kendiliğinden"
+  // boşalmıştı (kodlar çizgiye döner, araçlar silinmiş gibi görünürdü).
+  await setDoc(ref, { gunluk: { ...full, [t]: next } }, { merge: true });
 }
 
 /** Yemek / çay molası başlatır (aynı tipten açık mola varsa yeniden açmaz). */
@@ -332,6 +343,30 @@ export async function paydosVer(vehicleId: string): Promise<void> {
     molalar: (k.molalar || []).map((m) => (!m.t ? { ...m, t: now } : m)),
     paydos: now,
   }));
+}
+
+/**
+ * Paydos hâlâ geçerli mi?
+ *   • "İş başı yaptım" pini (isbasi) paydosu kaldırır
+ *   • Pin yoksa paydos, verilişinden sonraki ilk sabah 08:00'de OTOMATİK düşer
+ *     (gece vardiyasında 04:00'te verilen paydos 08:00'e kadar sayılır; 18:00 paydosu
+ *      ertesi sabah 08:00'e kadar sayılır — ertesi gün yeni kayıt zaten boştur)
+ */
+export function paydosAktif(k?: GunlukKaydi | null, now: Date = new Date()): boolean {
+  if (!k?.paydos) return false;
+  if (k.isbasi && k.isbasi > k.paydos) return false;
+  const p = new Date(k.paydos);
+  if (p > now) return true; // saat kayması: gelecek tarihli paydos geçerli sayılır
+  const kesim = new Date(p);
+  kesim.setHours(8, 0, 0, 0);
+  if (kesim <= p) kesim.setDate(kesim.getDate() + 1); // 08:00 sonrası verildiyse ertesi sabaha kaysın
+  return now < kesim;
+}
+
+/** Şoför "İş başı yaptım" pini — paydosu kaldırır, günün iş başı saatini yazar. */
+export async function isBasiVer(vehicleId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await gunlukGuncelle(vehicleId, (k) => ({ ...k, isbasi: now }));
 }
 
 /** Yeni görev açılırken aracın açık bekleme kaydını sessizce kapatır. */

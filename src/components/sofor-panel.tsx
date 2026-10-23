@@ -12,8 +12,8 @@
 // ============================================================
 import { useEffect, useMemo, useState } from 'react';
 import {
-  beklemeyeGec, beklemeyiBitir, createGorev, distanceBetween, gorevPin, molaBaslat, molaBitir, paydosVer,
-  OPEN_GOREV_DURUMLARI, today,
+  beklemeyeGec, beklemeyiBitir, createGorev, distanceBetween, gorevPin, isBasiVer, molaBaslat, molaBitir,
+  paydosAktif, paydosVer, OPEN_GOREV_DURUMLARI, today,
 } from '@/lib/db';
 import { fbErr, GOREV_TIP, MOLA_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
@@ -75,6 +75,9 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
   const acikCay = molalar.find((m) => m.tip === 'CAY' && !m.t) || null;
   const acikBekleme = molalar.find((m) => m.tip === 'BEKLEME' && !m.t) || null;
   const paydosSaati = gunluk?.paydos || null;
+  // Paydos: "İş başı yaptım" piniyle düşer, pin yoksa sabah 08:00'de otomatik biter.
+  const paydosVar = paydosAktif(gunluk);
+  const isbasiSaati = gunluk?.isbasi || null;
   const aktifPlan = (routes || []).find(
     (r) => r.vehicleId === vehicleId && r.status !== 'TAMAMLANDI' && !!r.date && r.date <= today(),
   ) || null;
@@ -404,16 +407,31 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
                 </div>
               )}
 
-              {/* Paydos */}
-              {paydosSaati ? (
-                <div style={{ fontSize: 12.5, background: '#dcfce7', color: '#166534', borderRadius: 9, padding: '8px 10px', fontWeight: 700 }}>
-                  Paydos verildi — {new Date(paydosSaati).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}. İyi dinlenmeler!
+              {/* Paydos — "İş başı yaptım" piniyle veya sabah 08:00'de otomatik biter */}
+              {paydosVar ? (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <div style={{ fontSize: 12.5, background: '#dcfce7', color: '#166534', borderRadius: 9, padding: '8px 10px', fontWeight: 700 }}>
+                    Paydos verildi — {paydosSaati ? new Date(paydosSaati).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}.
+                    Erken gelirsensen aşağıdaki pinle işe başlayabilirsin; pin atlmazsa sabah 08:00'de otomatik iş başı sayılır.
+                  </div>
+                  <button className="btn" style={{ padding: '12px 12px', fontWeight: 800, borderRadius: 10 }}
+                    disabled={busy === 'vardiya'}
+                    onClick={() => vardiyaIslemi(() => isBasiVer(vehicleId!), 'İş başı yapıldı — iyi işler!')}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Icon name="clock" size={16} /> İş başı yaptım</span>
+                  </button>
                 </div>
               ) : (
-                <button className="btn secondary" style={{ padding: '11px 12px', fontWeight: 800, borderRadius: 10, color: '#7c2d12' }}
-                  disabled={busy === 'vardiya'} onClick={paydosOnayla}>
-                  Paydos ver (gün sonu)
-                </button>
+                <>
+                  {isbasiSaati && (
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 600 }}>
+                      İş başı: {new Date(isbasiSaati).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  )}
+                  <button className="btn secondary" style={{ padding: '11px 12px', fontWeight: 800, borderRadius: 10, color: '#7c2d12' }}
+                    disabled={busy === 'vardiya'} onClick={paydosOnayla}>
+                    Paydos ver (gün sonu)
+                  </button>
+                </>
               )}
             </div></div>
           </div>

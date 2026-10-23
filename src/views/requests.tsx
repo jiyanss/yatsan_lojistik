@@ -268,7 +268,8 @@ function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, o
         </select>
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-        Talep PLANLANDI durumuna geçer; şoför işi bitirince raporlarda tur + km olarak sayılır.
+        Talep PLANLANDI durumuna geçer; şoför işi bitirince (&quot;İş bitti&quot; pini) talep otomatik
+        <b> Tamamlandı</b> olur ve raporlarda tur + km olarak sayılır.
       </div>
     </Modal>
   );

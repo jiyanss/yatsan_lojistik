@@ -80,7 +80,15 @@ export default function VehiclesView({ ctx }: { ctx: ViewCtx }) {
                 const stN = (id?: string | null) => stations.find((s) => s.id === id)?.code || null;
                 return (
                   <tr key={v.id} className={v.status === 'PASIF' ? 'dim' : ''}>
-                    <td><b>{v.code}</b></td>
+                    <td>
+                      <b>{v.code}</b>
+                      {!v.code && (
+                        <span className="badge st-beklemede" style={{ marginLeft: 6 }}
+                          title="Bu kaydın verileri eski bir yazım hatasından bozulmuş. Düzenle ile kod/ad/tip/sabit hat bilgilerini yeniden girin — aynı kayıt onarılır, şoför ataması ve görev geçmişi bağlantısı korunur.">
+                          Onarılmalı
+                        </span>
+                      )}
+                    </td>
                     <td>{v.name}</td>
                     <td><span className="badge type-badge">{VEHICLE_TYPES[v.type] || v.type}</span></td>
                     <td className="num">{v.capacityKg ? `${v.capacityKg} kg` : '—'}</td>
