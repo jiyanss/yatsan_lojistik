@@ -22,15 +22,26 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
   const gorevler = useCollection('gorevler');
   const stations = useCollection('stations');
   const distances = useCollection('distances');
+  const users = useCollection('users');
   const [busy, setBusy] = useState<string | null>(null);
 
-  const vehicle = (vehicles || []).find((v) => v.id === user.vehicleId) || null;
+  // Profil CANLI izlenir: yönetici rol/araç atadığında yeniden girişsiz anında görünür.
+  // (Auth profilinden gelen user.vehicleId yalnızca giriş anındaki durumdur.)
+  const meDoc = (users || []).find(
+    (u) => (u.uid || (u as unknown as { id?: string }).id) === user.uid,
+  );
+  const me: UserProfile = meDoc
+    ? { ...user, ...meDoc, uid: user.uid, vehicleId: meDoc.vehicleId ?? user.vehicleId ?? null }
+    : user;
+  const vehicleId = me.vehicleId || null;
+
+  const vehicle = (vehicles || []).find((v) => v.id === vehicleId) || null;
   const stName = (id?: string | null) => (stations || []).find((s) => s.id === id)?.name || '—';
   const kmOf = (g: Gorev) => distanceBetween((distances || []) as Distance[], g.fromId, g.toId);
 
   const mine = useMemo(
-    () => (gorevler || []).filter((g) => g.vehicleId === user.vehicleId),
-    [gorevler, user.vehicleId],
+    () => (gorevler || []).filter((g) => g.vehicleId === vehicleId),
+    [gorevler, vehicleId],
   );
   const open = mine
     .filter((g) => OPEN_GOREV_DURUMLARI.includes(g.durum))

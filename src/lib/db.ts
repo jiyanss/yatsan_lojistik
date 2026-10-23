@@ -227,6 +227,7 @@ async function ensureUserProfile(u: { uid: string; email: string | null; display
         uid: u.uid, email: u.email,
         displayName: d.displayName || u.displayName || (u.email || '').split('@')[0],
         role: d.role || 'izleyici',
+        vehicleId: d.vehicleId ?? null,
       };
     }
     // ilk kullanıcı mı? → admin
@@ -240,10 +241,10 @@ async function ensureUserProfile(u: { uid: string; email: string | null; display
       email: u.email, displayName: u.displayName || (u.email || '').split('@')[0],
       role, createdAt: serverTimestamp(),
     });
-    return { uid: u.uid, email: u.email, displayName: u.displayName || (u.email || '').split('@')[0], role };
+    return { uid: u.uid, email: u.email, displayName: u.displayName || (u.email || '').split('@')[0], role, vehicleId: null };
   } catch (e) {
     console.warn('Profil okunamadı:', e);
-    return { uid: u.uid, email: u.email, displayName: (u.email || '').split('@')[0], role: 'izleyici' };
+    return { uid: u.uid, email: u.email, displayName: (u.email || '').split('@')[0], role: 'izleyici', vehicleId: null };
   }
 }
 
