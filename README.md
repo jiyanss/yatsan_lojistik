@@ -120,3 +120,5 @@ firestore.rules   # Firestore güvenlik kuralları
 | **Yönetici (admin)** | Tüm modüller + kullanıcı ve ayar yönetimi |
 | **Planlayıcı (planlayici)** | Talep, rota, sevkiyat ve tanım işlemleri |
 | **İzleyici (izleyici)** | Yalnızca görüntüleme |
+
+V3
