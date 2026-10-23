@@ -20,8 +20,12 @@ export default function UsersView({ ctx }: { ctx: ViewCtx }) {
 
   const sorted = useMemo(() => {
     if (!users) return [];
-    return [...(users as (UserProfile & { uid: string })[])].sort((a, b) =>
-      (a.email || '').localeCompare(b.email || '', 'tr'));
+    // Firestore satırlarında uid alanı yoktur — doc id'si ile normalize edilir.
+    // (Aksi halde update('users', undefined) → "Cannot read properties of undefined" hatası.)
+    const rows = (users as unknown as (UserProfile & { uid?: string; id?: string })[]).map(
+      (r) => ({ ...r, uid: r.uid || r.id || '' }),
+    );
+    return rows.sort((a, b) => (a.email || '').localeCompare(b.email || '', 'tr'));
   }, [users]);
 
   if (!ctx.isAdmin) {

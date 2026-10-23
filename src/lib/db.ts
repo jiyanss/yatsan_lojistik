@@ -152,8 +152,10 @@ export async function istasyondanAracCagir(
 /** Araca atanmış (rolü şoför olan) kullanıcıyı bulur. */
 export async function soforOfVehicle(vehicleId: string): Promise<UserProfile | null> {
   try {
-    const users = (await list('users')) as (UserProfile & { uid: string })[];
-    return users.find((u) => u.role === 'sofor' && u.vehicleId === vehicleId) || null;
+    const users = (await list('users')) as (UserProfile & { uid?: string; id?: string })[];
+    const hit = users.find((u) => u.role === 'sofor' && u.vehicleId === vehicleId) || null;
+    // Firestore satırlarında uid yoksa doc id'sinden doldurulur.
+    return hit ? { ...hit, uid: hit.uid || hit.id || '' } : null;
   } catch { return null; }
 }
 
@@ -334,6 +336,7 @@ export async function add<C extends ColName>(col: C, data: Record<string, unknow
 }
 
 export async function update(col: ColName, id: string, patch: Record<string, unknown>): Promise<void> {
+  if (!id) throw new Error('Kayıt kimliği bulunamadı. Sayfayı yenileyip tekrar deneyin.');
   if (mode === 'demo') {
     const arr = demo![col] as { id?: string; uid?: string }[];
     const i = arr.findIndex((x) => (x.id || x.uid) === id);
@@ -349,6 +352,7 @@ export async function update(col: ColName, id: string, patch: Record<string, unk
 }
 
 export async function remove(col: ColName, id: string): Promise<void> {
+  if (!id) throw new Error('Kayıt kimliği bulunamadı. Sayfayı yenileyip tekrar deneyin.');
   if (mode === 'demo') {
     demo![col] = (demo![col] as { id?: string; uid?: string }[]).filter(
       (x) => (x.id || x.uid) !== id,
