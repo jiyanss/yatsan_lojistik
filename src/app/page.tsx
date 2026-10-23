@@ -8,10 +8,12 @@ import type { UserProfile } from '@/lib/types';
 import { getMode, initDB, onAuth, signOutUser } from '@/lib/db';
 import { findNav, Sidebar, Topbar } from '@/components/shell';
 import AuthScreen from '@/components/auth-screen';
+import SoforPanel from '@/components/sofor-panel';
 import { ToastProvider } from '@/components/toast';
 import DashboardView from '@/views/dashboard';
 import RequestsView from '@/views/requests';
 import RoutesView from '@/views/routes';
+import TakipView from '@/views/takip';
 import ShipmentsView from '@/views/shipments';
 import StationsView from '@/views/stations';
 import VehiclesView from '@/views/vehicles';
@@ -78,6 +80,15 @@ export default function Home() {
     );
   }
 
+  // Şoför yalnızca mobil paneli görür — masaüstü kabuğuna hiç girmez.
+  if (user.role === 'sofor') {
+    return (
+      <ToastProvider>
+        <SoforPanel user={user} onLogout={logout} />
+      </ToastProvider>
+    );
+  }
+
   const ctx: ViewCtx = { user, canEdit, isAdmin, navigate, refresh, demoMode: mode === 'demo' };
 
   return (
@@ -104,6 +115,7 @@ function ViewSwitch({ route, ctx, refreshKey }: {
   switch (route) {
     case 'talepler': return <RequestsView key={refreshKey} ctx={ctx} />;
     case 'rotalar': return <RoutesView key={refreshKey} ctx={ctx} />;
+    case 'takip': return <TakipView key={refreshKey} ctx={ctx} />;
     case 'sevkiyatlar': return <ShipmentsView key={refreshKey} ctx={ctx} />;
     case 'istasyonlar': return <StationsView key={refreshKey} ctx={ctx} />;
     case 'araclar': return <VehiclesView key={refreshKey} ctx={ctx} />;

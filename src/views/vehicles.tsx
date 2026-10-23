@@ -4,21 +4,22 @@ import { useMemo, useState } from 'react';
 import { add, remove, today, update } from '@/lib/db';
 import { VEHICLE_STATUS, VEHICLE_TYPES, fbErr } from '@/lib/constants';
 import { matchText, upperTr } from '@/lib/format';
-import type { RoutePlan, Vehicle, VehicleStatus, VehicleType } from '@/lib/types';
+import type { RoutePlan, Station, Vehicle, VehicleStatus, VehicleType } from '@/lib/types';
 import Icon from '@/components/Icon';
-import { EmptyState, Modal, VehicleStatusBadge, confirmDialog } from '@/components/ui';
+import { EmptyState, Modal, VehicleStatusBadge, confirmDialog, renderOpts } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useCollections } from '@/hooks/useData';
 import type { ViewCtx } from './context';
 
 export default function VehiclesView({ ctx }: { ctx: ViewCtx }) {
   const toast = useToast();
-  const data = useCollections(['vehicles', 'routes']);
+  const data = useCollections(['vehicles', 'routes', 'stations']);
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<Vehicle | 'new' | null>(null);
 
   const vehicles = (data?.vehicles || null) as Vehicle[] | null;
   const routes = (data?.routes || []) as RoutePlan[];
+  const stations = (data?.stations || []) as Station[];
   const todayRoutes = routes.filter((r) => r.date === today());
 
   const sorted = useMemo(() => {
@@ -71,17 +72,21 @@ export default function VehiclesView({ ctx }: { ctx: ViewCtx }) {
         ) : (
           <div className="table-wrap"><table className="tbl">
             <thead><tr>
-              <th>Kod</th><th>Ad</th><th>Tip</th><th className="num">Kapasite</th><th>Sürücü</th><th>Bugün</th><th>Durum</th><th className="actions">İşlem</th>
+              <th>Kod</th><th>Ad</th><th>Tip</th><th className="num">Kapasite</th><th>Sabit Hat</th><th>Sürücü</th><th>Bugün</th><th>Durum</th><th className="actions">İşlem</th>
             </tr></thead>
             <tbody>
               {list.map((v) => {
                 const plan = todayRoutes.find((r) => r.vehicleId === v.id);
+                const stN = (id?: string | null) => stations.find((s) => s.id === id)?.code || null;
                 return (
                   <tr key={v.id} className={v.status === 'PASIF' ? 'dim' : ''}>
                     <td><b>{v.code}</b></td>
                     <td>{v.name}</td>
                     <td><span className="badge type-badge">{VEHICLE_TYPES[v.type] || v.type}</span></td>
                     <td className="num">{v.capacityKg ? `${v.capacityKg} kg` : '—'}</td>
+                    <td style={{ fontSize: 12 }}>{v.sabitFromId && v.sabitToId
+                      ? <span className="badge st-planlandi">{stN(v.sabitFromId)} → {stN(v.sabitToId)}</span>
+                      : '—'}</td>
                     <td>{v.driver || '—'}</td>
                     <td>{plan
                       ? <span className="badge st-planlandi">{plan.status === 'TASLAK' ? 'Taslak plan' : plan.status === 'ONAYLANDI' ? 'Planlı' : 'Tamamlandı'}</span>
@@ -111,6 +116,8 @@ export default function VehiclesView({ ctx }: { ctx: ViewCtx }) {
 
 function VehicleForm({ initial, onClose }: { initial: Vehicle | null; onClose: () => void }) {
   const toast = useToast();
+  const data = useCollections(['stations']);
+  const stations = (data?.stations || []) as Station[];
   const [f, setF] = useState({
     code: initial?.code || '',
     type: (initial?.type || 'FORKLIFT') as VehicleType,
@@ -118,6 +125,8 @@ function VehicleForm({ initial, onClose }: { initial: Vehicle | null; onClose: (
     cap: initial?.capacityKg != null ? String(initial.capacityKg) : '',
     driver: initial?.driver || '',
     status: (initial?.status || 'AKTIF') as VehicleStatus,
+    sabitFromId: (initial?.sabitFromId || '') as string,
+    sabitToId: (initial?.sabitToId || '') as string,
     note: initial?.note || '',
   });
   const [busy, setBusy] = useState(false);
@@ -126,6 +135,7 @@ function VehicleForm({ initial, onClose }: { initial: Vehicle | null; onClose: (
   async function save() {
     const code = upperTr(f.code.trim());
     if (!code) { toast('Araç kodu zorunludur.', 'error'); return; }
+    if (f.sabitFromId && f.sabitFromId === f.sabitToId) { toast('Sabit hat: nereden ve nereye farklı olmalı.', 'error'); return; }
     setBusy(true);
     const data = {
       code,
@@ -134,6 +144,8 @@ function VehicleForm({ initial, onClose }: { initial: Vehicle | null; onClose: (
       capacityKg: f.cap ? Number(f.cap) : null,
       driver: f.driver.trim(),
       status: f.status,
+      sabitFromId: f.sabitFromId || null,
+      sabitToId: f.sabitToId || null,
       note: f.note.trim(),
     };
     try {
@@ -185,6 +197,27 @@ function VehicleForm({ initial, onClose }: { initial: Vehicle | null; onClose: (
           <select value={f.status} onChange={set('status')}>
             {Object.entries(VEHICLE_STATUS).map(([v, t]) => <option key={v} value={v}>{t}</option>)}
           </select>
+        </div>
+      </div>
+      <div style={{ borderTop: '1px solid var(--line)', margin: '4px 0 12px', paddingTop: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>Sabit Hat (opsiyonel)</div>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>
+          Bu araç sürekli aynı yerden yükleyip aynı yere boşaltıyorsa iki istasyonu seçin —
+          şoför mobil panelinde hat görünür ve tek dokunuşla tur açar.
+        </div>
+        <div className="form-grid">
+          <div className="field">
+            <label>Nereden (yükleme)</label>
+            <select value={f.sabitFromId} onChange={set('sabitFromId')}>
+              {renderOpts(stations.map((s) => ({ v: s.id, t: `${s.code} · ${s.name}` })), f.sabitFromId, '— Yok —')}
+            </select>
+          </div>
+          <div className="field">
+            <label>Nereye (boşaltma)</label>
+            <select value={f.sabitToId} onChange={set('sabitToId')}>
+              {renderOpts(stations.map((s) => ({ v: s.id, t: `${s.code} · ${s.name}` })), f.sabitToId, '— Yok —')}
+            </select>
+          </div>
         </div>
       </div>
       <div className="field">

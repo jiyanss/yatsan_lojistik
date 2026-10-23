@@ -2,7 +2,7 @@
 
 React (Next.js 16 + TypeScript) ile geliştirilmiş iç lojistik planlama sistemi.
 **GitHub + Vercel + Firebase** üçlüsüyle çalışır; tüm denemeler Vercel üzerinden yapılabilir,
-lokalde çalıştırmak zorunlu değildir.test
+lokalde çalıştırmak zorunlu değildir.
 
 ## Modüller
 
@@ -91,6 +91,28 @@ npm install
 npm run dev   # http://localhost:3000
 ```
 
+## Şoför Paneli ve Araç Takip
+
+Sabit hat araçları (hep aynı yerden yükleyip aynı yere boşaltan araçlar) için ayrı bir
+mobil ekran sistemi vardır:
+
+- **Araç Takip (masaüstü):** Operasyon → Araç Takip. Her aracın canlı durumu (Boşta / Yeni görev /
+  Yolda / İstasyonda / Dolu bekliyor), şoförün bastığı pinler ve bugünün hareketleri.
+  **İstasyondan Araç Çağır** düğmesi görevi **boşta olan ilk araca** otomatik düşürür.
+- **Şoför Paneli (mobil):** Rolü **Şoför** olan kullanıcı giriş yaptığında doğrudan mobil panele düşer;
+  masaüstü modüllerini görmez. Panelden atanan işleri görür (hangi istasyondan → hangi istasyona,
+  dolu/boş) ve pin basar:
+  `Çıktım` → `Vardım — Yer dolu (indirme bekliyorum)` / `Vardım — Yer boş` → `İş bitti`.
+- **Kurulum sırası:** ① Araçlar sayfasından araca **Sabit Hat** tanımlayın (nereden → nereye),
+  ② Kullanıcılar sayfasından **Yeni Kullanıcı** ile şoför hesabı açıp araç atayın,
+  ③ şoför telefonundan siteye girip **Ana ekrana ekle** der — uygulama gibi çalışır.
+- İstasyonlar arası mesafeleri **İstasyonlar & Mesafeler** sayfasından girin; şoför paneli görevde
+  mesafeyi gösterir.
+
+> **Not:** Şoför hesabı açma ve `gorevler` koleksiyonu için Ayarlar sayfasındaki **güncel Firestore
+> kurallarını** Firebase Console'a yapıştırın (eski kurallarda `users.create` yönetici izni ve
+> `gorevler` kuralı yoktur).
+
 ## Demo Modu
 
 - Firebase girilmeden uygulama tam işlevsel çalışır; veriler **yalnızca o tarayıcıda** tutulur.
@@ -120,6 +142,4 @@ firestore.rules   # Firestore güvenlik kuralları
 | **Yönetici (admin)** | Tüm modüller + kullanıcı ve ayar yönetimi |
 | **Planlayıcı (planlayici)** | Talep, rota, sevkiyat ve tanım işlemleri |
 | **İzleyici (izleyici)** | Yalnızca görüntüleme |
-
-V3
-v4
+| **Şoför (sofor)** | Yalnızca mobil görev paneli (atanan araç, Çıktım/Vardım pinleri) |

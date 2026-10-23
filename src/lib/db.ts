@@ -5,22 +5,23 @@
 // Tüm görünümler yalnızca bu modülü kullanır.
 // ============================================================
 import {
-  createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
+  createUserWithEmailAndPassword, getAuth, onAuthStateChanged, sendPasswordResetEmail,
   signInWithEmailAndPassword, signOut, updateProfile,
 } from 'firebase/auth';
+import { deleteApp, initializeApp } from 'firebase/app';
 import {
   addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs,
   onSnapshot, query, serverTimestamp, setDoc, writeBatch,
 } from 'firebase/firestore';
-import { ensureFirebase, isFirebaseConfigured, type FbContext } from './firebase';
+import { ensureFirebase, getFirebaseConfig, isFirebaseConfigured, type FbContext } from './firebase';
 import { buildDemoData } from './demo-data';
 import { uid, todayISO } from './format';
 import type {
-  ColName, DemoDB, Distance, RoutePlan, RouteTotals, Shipment, Station,
-  TransportRequest, UserProfile, Vehicle,
+  ColName, DemoDB, Distance, Gorev, GorevDurum, GorevPin, GorevTip, PinTip, Role,
+  RoutePlan, RouteTotals, Shipment, Station, TransportRequest, UserProfile, Vehicle,
 } from './types';
 
-export const COLS: ColName[] = ['users', 'stations', 'distances', 'vehicles', 'requests', 'routes', 'shipments'];
+export const COLS: ColName[] = ['users', 'stations', 'distances', 'vehicles', 'requests', 'routes', 'shipments', 'gorevler'];
 const DEMO_KEY = 'yatsan_il_db_v1';
 
 type Mode = 'demo' | 'firebase';
@@ -79,6 +80,126 @@ export async function initDB(): Promise<Mode> {
 
 export const getMode = (): Mode => mode;
 export const isDemo = (): boolean => mode === 'demo';
+
+/* ---------------- görevler (şoför paneli / araç takip) ---------------- */
+/** Açık (devam eden) görev durumları — bu durumlarda araç boşta sayılmaz */
+export const OPEN_GOREV_DURUMLARI: GorevDurum[] = ['YENI', 'YOLDA', 'ISTASYONDA', 'BEKLIYOR'];
+
+export function isBosArac(vehicleId: string, gorevler: Gorev[]): boolean {
+  return !gorevler.some((g) => g.vehicleId === vehicleId && OPEN_GOREV_DURUMLARI.includes(g.durum));
+}
+
+export async function createGorev(data: {
+  vehicleId: string;
+  tip: GorevTip;
+  fromId?: string | null;
+  toId?: string | null;
+  dolu?: boolean;
+  km?: number | null;
+  soforUid?: string | null;
+  soforAd?: string | null;
+  not?: string;
+}): Promise<string> {
+  const now = new Date().toISOString();
+  const pins: GorevPin[] = [{ tip: 'ATANDI', at: now, by: 'Sistem' }];
+  const payload = {
+    ...data,
+    durum: 'YENI' as GorevDurum,
+    pins,
+    createdAt: now,
+    updatedAt: now,
+  };
+  return add('gorevler', payload as unknown as Record<string, unknown>);
+}
+
+/** Şoför (veya admin) pin basar: durum güncellenir + pin geçmişe eklenir. */
+export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum, byAd?: string): Promise<void> {
+  if (!gorev.id) throw new Error('Görev kimliği yok.');
+  const now = new Date().toISOString();
+  const pins: GorevPin[] = [...(gorev.pins || []), { tip, at: now, by: byAd || gorev.soforAd || 'Sistem' }];
+  await update('gorevler', gorev.id, { durum: yeniDurum, pins, updatedAt: now });
+}
+
+/**
+ * İstasyon araç çağırır: kural — ihtiyaç anında boşta olan İLK araç düşer.
+ * vehicleIdOverride verilirse o araç atanır. Boşta araç yoksa 'BOS_YOK' döner.
+ */
+export async function istasyondanAracCagir(
+  toStationId: string,
+  vehicleIdOverride?: string | null,
+  byAd?: string,
+): Promise<{ vehicleId: string } | 'BOS_YOK'> {
+  const [vehicles, gorevler] = await Promise.all([list('vehicles'), list('gorevler')]);
+  const uygun = (vehicles as Vehicle[]).filter((v) => v.status === 'AKTIF');
+  const secilen = vehicleIdOverride
+    ? uygun.find((v) => v.id === vehicleIdOverride) || null
+    : uygun.filter((v) => isBosArac(v.id, gorevler as Gorev[]))
+        .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'tr'))[0] || null;
+  if (!secilen) return 'BOS_YOK';
+  const sofor = await soforOfVehicle(secilen.id);
+  await createGorev({
+    vehicleId: secilen.id,
+    tip: 'CAGRI',
+    toId: toStationId,
+    dolu: false,
+    soforUid: sofor?.uid || null,
+    soforAd: sofor?.displayName || null,
+    not: byAd ? `${byAd} tarafından çağrıldı` : undefined,
+  });
+  return { vehicleId: secilen.id };
+}
+
+/** Araca atanmış (rolü şoför olan) kullanıcıyı bulur. */
+export async function soforOfVehicle(vehicleId: string): Promise<UserProfile | null> {
+  try {
+    const users = (await list('users')) as (UserProfile & { uid: string })[];
+    return users.find((u) => u.role === 'sofor' && u.vehicleId === vehicleId) || null;
+  } catch { return null; }
+}
+
+/**
+ * Admin, paneli terk etmeden yeni kullanıcı açar (şoför vb.).
+ * Firebase modunda İKİNCİL bir App örneği kullanılır — mevcut admin oturumu korunur.
+ */
+export async function adminCreateUser(p: {
+  email: string; password: string; displayName: string; role: Role; vehicleId?: string | null;
+}): Promise<{ uid: string; profileOk: boolean }> {
+  const email = (p.email || '').trim();
+  if (!email || !/\S+@\S+\.\S+$/.test(email)) throw new Error('Geçerli bir e-posta girin.');
+  if (!p.password || p.password.length < 6) throw new Error('Şifre en az 6 karakter olmalı.');
+
+  if (mode === 'demo') {
+    loadDemo();
+    const users = demoRows('users');
+    if (users.some((u) => (u.email || '').toLowerCase() === email.toLowerCase())) throw new Error('Bu e-posta zaten kayıtlı.');
+    const user: UserProfile & { uid: string } = {
+      uid: uid(), email, displayName: p.displayName || email.split('@')[0], role: p.role,
+      vehicleId: p.vehicleId || null, createdAt: new Date().toISOString(),
+    };
+    demo!.users.push(user); saveDemo(); emitCol('users');
+    return { uid: user.uid, profileOk: true };
+  }
+
+  const f = fb!;
+  const app2 = initializeApp(getFirebaseConfig(), 'yatsan-kullanici-ekle-' + Date.now());
+  try {
+    const cred = await createUserWithEmailAndPassword(getAuth(app2), email, p.password);
+    try { if (p.displayName) await updateProfile(cred.user, { displayName: p.displayName }); } catch { /* önemsiz */ }
+    let profileOk = true;
+    try {
+      await setDoc(doc(f.db, 'users', cred.user.uid), {
+        email: cred.user.email, displayName: p.displayName || email.split('@')[0],
+        role: p.role, vehicleId: p.vehicleId || null, createdAt: serverTimestamp(),
+      });
+    } catch {
+      // Kurallar eskiyse profil yazılamayabilir — kullanıcı ilk girişinde kendiliğinden oluşur.
+      profileOk = false;
+    }
+    return { uid: cred.user.uid, profileOk };
+  } finally {
+    try { await deleteApp(app2); } catch { /* yoksay */ }
+  }
+}
 
 /* ---------------- kimlik doğrulama ---------------- */
 export function onAuth(cb: AuthCb): void {

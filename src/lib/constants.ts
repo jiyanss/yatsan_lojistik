@@ -1,7 +1,7 @@
 // ============================================================
 // Sabit etiketler ve durum eşlemeleri
 // ============================================================
-import type { Priority, ReqStatus, Role, RouteStatus, ShipDirection, ShipStatus, StationType, StopAction, VehicleStatus, VehicleType } from './types';
+import type { GorevDurum, GorevTip, PinTip, Priority, ReqStatus, Role, RouteStatus, ShipDirection, ShipStatus, StationType, StopAction, VehicleStatus, VehicleType } from './types';
 
 export const REQ_STATUS: Record<ReqStatus, string> = {
   BEKLEMEDE: 'Beklemede', ONAYLANDI: 'Onaylandı', PLANLANDI: 'Plana Alındı',
@@ -38,7 +38,28 @@ export const STOP_ACTIONS: Record<StopAction, string> = {
 };
 
 export const ROLES: Record<Role, string> = {
-  admin: 'Yönetici', planlayici: 'Planlayıcı', izleyici: 'İzleyici',
+  admin: 'Yönetici', planlayici: 'Planlayıcı', izleyici: 'İzleyici', sofor: 'Şoför',
+};
+
+/* ---------------- Görev (şoför paneli / araç takip) etiketleri ---------------- */
+export const GOREV_DURUM: Record<GorevDurum, string> = {
+  YENI: 'Yeni görev', YOLDA: 'Yolda', ISTASYONDA: 'İstasyonda',
+  BEKLIYOR: 'Dolu bekliyor', TAMAMLANDI: 'Tamamlandı', IPTAL: 'İptal',
+};
+
+export const GOREV_TIP: Record<GorevTip, string> = {
+  HAT: 'Sabit hat', CAGRI: 'İstasyon çağrısı',
+};
+
+/** Şoförün panelde bastığı pinler */
+export const PIN_LABEL: Record<PinTip, string> = {
+  ATANDI: 'Görev atandı',
+  CIKTIM: 'Çıktım — yolda',
+  ISTASYONDA: 'İstasyonda oldum',
+  VARDIM_BOS: 'Vardım — yer boş',
+  VARDIM_DOLU: 'Vardım — dolu, indirme bekliyorum',
+  TAMAM: 'İş tamam',
+  IPTAL: 'İptal edildi',
 };
 
 export function roleLabel(role?: string | null): string {
@@ -54,10 +75,16 @@ export const MIGRATE_GROUPS: Record<string, string[]> = {
 
 export const FIRESTORE_RULES = `rules_version = '2';
 service cloud.firestore {
+  function role() {
+    return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+  }
+  function isAdmin() {
+    return request.auth != null && role() == 'admin';
+  }
   match /databases/{database}/documents {
     match /users/{uid} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && (request.auth.uid == uid || isAdmin());
       allow update, delete: if request.auth != null;
     }
     match /stations/{id}   { allow read, write: if request.auth != null; }
@@ -66,6 +93,7 @@ service cloud.firestore {
     match /requests/{id}   { allow read, write: if request.auth != null; }
     match /routes/{id}     { allow read, write: if request.auth != null; }
     match /shipments/{id}  { allow read, write: if request.auth != null; }
+    match /gorevler/{id}   { allow read, write: if request.auth != null; }
   }
 }`;
 

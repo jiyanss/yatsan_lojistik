@@ -2,13 +2,15 @@
 // Yatsan İç Lojistik Planlama — tip tanımları
 // ============================================================
 
-export type Role = 'admin' | 'planlayici' | 'izleyici';
+export type Role = 'admin' | 'planlayici' | 'izleyici' | 'sofor';
 
 export interface UserProfile {
   uid: string;
   email: string | null;
   displayName: string;
   role: Role;
+  /** Şoför rolünde: bu kullanıcının panelinde görünecek araç */
+  vehicleId?: string | null;
   createdAt?: string | object;
 }
 
@@ -44,8 +46,41 @@ export interface Vehicle {
   capacityKg?: number | null;
   driver?: string;
   status: VehicleStatus;
+  /** Sabit hat: araç sürekli bu istasyondan yükler */
+  sabitFromId?: string | null;
+  /** Sabit hat: araç sürekli bu istasyona boşaltır */
+  sabitToId?: string | null;
   note?: string;
   createdAt?: string;
+}
+
+/* ---------------- Görevler (şoför paneli / araç takip) ---------------- */
+export type GorevTip = 'HAT' | 'CAGRI';
+export type GorevDurum = 'YENI' | 'YOLDA' | 'ISTASYONDA' | 'BEKLIYOR' | 'TAMAMLANDI' | 'IPTAL';
+export type PinTip = 'ATANDI' | 'CIKTIM' | 'ISTASYONDA' | 'VARDIM_BOS' | 'VARDIM_DOLU' | 'TAMAM' | 'IPTAL';
+
+export interface GorevPin {
+  tip: PinTip;
+  at: string; // ISO
+  by?: string;
+}
+
+export interface Gorev {
+  id?: string;
+  vehicleId: string;
+  soforUid?: string | null;
+  soforAd?: string | null;
+  tip: GorevTip;
+  fromId?: string | null;
+  toId?: string | null;
+  /** Dolu mu boş mu hareket */
+  dolu?: boolean;
+  km?: number | null;
+  durum: GorevDurum;
+  pins: GorevPin[];
+  not?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type ReqStatus = 'BEKLEMEDE' | 'ONAYLANDI' | 'PLANLANDI' | 'TAMAMLANDI' | 'IPTAL';
@@ -118,7 +153,7 @@ export interface Shipment {
   createdAt?: string;
 }
 
-export type ColName = 'users' | 'stations' | 'distances' | 'vehicles' | 'requests' | 'routes' | 'shipments';
+export type ColName = 'users' | 'stations' | 'distances' | 'vehicles' | 'requests' | 'routes' | 'shipments' | 'gorevler';
 
 export interface DemoDB {
   users: (UserProfile & { uid: string })[];
@@ -128,5 +163,6 @@ export interface DemoDB {
   requests: TransportRequest[];
   routes: RoutePlan[];
   shipments: Shipment[];
+  gorevler: Gorev[];
   session: string | null;
 }

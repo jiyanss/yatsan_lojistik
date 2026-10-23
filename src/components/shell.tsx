@@ -20,6 +20,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'talepler', label: 'Araç Talepleri', icon: 'clipboard' },
       { id: 'rotalar', label: 'Rota Planlama', icon: 'route' },
+      { id: 'takip', label: 'Araç Takip', icon: 'mappin' },
       { id: 'sevkiyatlar', label: 'Sevkiyatlar', icon: 'package' },
     ],
   },

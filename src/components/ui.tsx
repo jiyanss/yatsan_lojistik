@@ -6,11 +6,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Icon from './Icon';
 import {
-  PRIORITY, REQ_STATUS, ROUTE_STATUS, SHIP_STATUS, STATION_TYPES, STOP_ACTIONS,
+  GOREV_DURUM, GOREV_TIP, PRIORITY, REQ_STATUS, ROUTE_STATUS, SHIP_STATUS, STATION_TYPES, STOP_ACTIONS,
   VEHICLE_STATUS, VEHICLE_TYPES,
 } from '@/lib/constants';
 import type {
-  Priority, ReqStatus, RouteStatus, ShipDirection, ShipStatus, StationType, StopAction,
+  GorevDurum, GorevTip, Priority, ReqStatus, RouteStatus, ShipDirection, ShipStatus, StationType, StopAction,
   VehicleStatus, VehicleType,
 } from '@/lib/types';
 
@@ -96,6 +96,15 @@ export const StationTypeBadge = ({ t }: { t: StationType | string }) =>
   b('type-badge', STATION_TYPES[t as StationType] || t);
 export const DirectionBadge = ({ d }: { d: ShipDirection | string }) =>
   b(d === 'GELEN' ? 'yon-gelen' : 'yon-giden', d === 'GELEN' ? 'Gelen' : 'Giden');
+export const GorevDurumBadge = ({ s }: { s: GorevDurum | string }) => {
+  const map: Record<string, string> = {
+    YENI: 'st-beklemede', YOLDA: 'st-planlandi', ISTASYONDA: 'st-onaylandi',
+    BEKLIYOR: 'st-iptal', TAMAMLANDI: 'st-tamamlandi', IPTAL: 'st-iptal',
+  };
+  return b(map[String(s)] || 'st-taslak', GOREV_DURUM[s as GorevDurum] || s);
+};
+export const GorevTipBadge = ({ t }: { t: GorevTip | string }) =>
+  b(String(t) === 'CAGRI' ? 'pr-yuksek' : 'type-badge', GOREV_TIP[t as GorevTip] || t);
 
 export const STOP_ACTION_LABEL = STOP_ACTIONS;
 export const VEHICLE_TYPE_LABEL = VEHICLE_TYPES;

@@ -43,7 +43,7 @@ export function buildDemoData(): DemoDB {
   const vehicles = [
     { id: vh.fr1, code: 'FR-01', name: 'Forklift 1', type: 'FORKLIFT' as const, capacityKg: 2000, driver: 'Mehmet K.', status: 'AKTIF' as const, note: '', createdAt: iso(60 * 24 * 25) },
     { id: vh.fr2, code: 'FR-02', name: 'Forklift 2', type: 'FORKLIFT' as const, capacityKg: 2500, driver: 'Ayşe T.', status: 'AKTIF' as const, note: '', createdAt: iso(60 * 24 * 25) },
-    { id: vh.tr1, code: 'TR-01', name: 'Transpalet 1', type: 'TRANSPALET' as const, capacityKg: 1200, driver: 'Hasan D.', status: 'AKTIF' as const, note: '', createdAt: iso(60 * 24 * 25) },
+    { id: vh.tr1, code: 'TR-01', name: 'Transpalet 1', type: 'TRANSPALET' as const, capacityKg: 1200, driver: 'Hasan D.', status: 'AKTIF' as const, note: 'Sabit hat: Paketleme → Merkez Depo', sabitFromId: st.pak, sabitToId: st.mrz, createdAt: iso(60 * 24 * 25) },
     { id: vh.ck1, code: 'CK-01', name: 'Çekici (Trawas)', type: 'CEKICI' as const, capacityKg: 3000, driver: 'Ali V.', status: 'AKTIF' as const, note: 'Rota taşımacılığında kullanılır', createdAt: iso(60 * 24 * 25) },
     { id: vh.fr3, code: 'FR-03', name: 'Forklift 3', type: 'FORKLIFT' as const, capacityKg: 1500, driver: '', status: 'BAKIMDA' as const, note: 'Hidrolik bakım', createdAt: iso(60 * 24 * 20) },
   ];
@@ -120,9 +120,35 @@ export function buildDemoData(): DemoDB {
 
   const users = [
     { uid: 'u-demo-admin', email: 'demo@yatsan.local', displayName: 'Demo Yönetici', role: 'admin' as const, createdAt: iso(60 * 24 * 30) },
+    { uid: 'u-demo-sofor', email: 'sofor@yatsan.local', displayName: 'Hasan D. (Şoför)', role: 'sofor' as const, vehicleId: vh.tr1, createdAt: iso(60 * 24 * 20) },
   ];
 
-  return { users, stations, distances, vehicles, requests, routes, shipments, session: null };
+  /* Şoför paneli demo görevleri: TR-01 sabit hatta bugün bir tamamlanmış + bir açık görev */
+  const t = (minusMin: number) => new Date(now - minusMin * 60000).toISOString();
+  const gorevler = [
+    {
+      id: uid(), vehicleId: vh.tr1, soforUid: 'u-demo-sofor', soforAd: 'Hasan D. (Şoför)',
+      tip: 'HAT' as const, fromId: st.pak, toId: st.mrz, dolu: true,
+      km: dist(st.pak, st.mrz, 0).meters, durum: 'TAMAMLANDI' as const,
+      pins: [
+        { tip: 'ATANDI' as const, at: t(300), by: 'Sistem' },
+        { tip: 'CIKTIM' as const, at: t(290), by: 'Hasan D. (Şoför)' },
+        { tip: 'VARDIM_DOLU' as const, at: t(275), by: 'Hasan D. (Şoför)' },
+        { tip: 'TAMAM' as const, at: t(260), by: 'Hasan D. (Şoför)' },
+      ],
+      createdAt: t(300), updatedAt: t(260),
+    },
+    {
+      id: uid(), vehicleId: vh.tr1, soforUid: 'u-demo-sofor', soforAd: 'Hasan D. (Şoför)',
+      tip: 'HAT' as const, fromId: st.pak, toId: st.mrz, dolu: false,
+      km: dist(st.pak, st.mrz, 0).meters, durum: 'YENI' as const,
+      pins: [{ tip: 'ATANDI' as const, at: t(20), by: 'Sistem' }],
+      not: 'Boş palet dönüşü',
+      createdAt: t(20), updatedAt: t(20),
+    },
+  ];
+
+  return { users, stations, distances, vehicles, requests, routes, shipments, gorevler, session: null };
 }
 
 /** Demo hesap bilgileri */
