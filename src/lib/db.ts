@@ -83,10 +83,25 @@ export const isDemo = (): boolean => mode === 'demo';
 
 /* ---------------- görevler (şoför paneli / araç takip) ---------------- */
 /** Açık (devam eden) görev durumları — bu durumlarda araç boşta sayılmaz */
-export const OPEN_GOREV_DURUMLARI: GorevDurum[] = ['YENI', 'YOLDA', 'ISTASYONDA', 'BEKLIYOR'];
+export const OPEN_GOREV_DURUMLARI: GorevDurum[] = ['YENI', 'YOLDA', 'DONUS_YOLDA', 'ISTASYONDA', 'BEKLIYOR'];
 
 export function isBosArac(vehicleId: string, gorevler: Gorev[]): boolean {
   return !gorevler.some((g) => g.vehicleId === vehicleId && OPEN_GOREV_DURUMLARI.includes(g.durum));
+}
+
+/**
+ * Aracın şu an hangi istasyonda olduğunu tahmin eder:
+ *   • Açık görevi varsa → görevin ilgili istasyonu (YENI'de yükleme, yolda/dönüşte varış noktası)
+ *   • Boşta ise → sabit hattının yükleme istasyonu, o da yoksa son görevinin varış noktası
+ */
+export function aracinStasyonu(v: Vehicle, gorevler: Gorev[]): string | null {
+  const open = gorevler.find((g) => g.vehicleId === v.id && OPEN_GOREV_DURUMLARI.includes(g.durum));
+  if (open) return open.durum === 'YENI' ? (open.fromId || open.toId || null) : (open.toId || open.fromId || null);
+  if (v.sabitFromId) return v.sabitFromId;
+  const son = (gorevler || [])
+    .filter((g) => g.vehicleId === v.id && g.durum === 'TAMAMLANDI')
+    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))[0];
+  return son?.toId || null;
 }
 
 export async function createGorev(data: {
@@ -99,12 +114,27 @@ export async function createGorev(data: {
   soforUid?: string | null;
   soforAd?: string | null;
   not?: string;
+  /** Tur zincirinde şoför yola çıkmış olarak açılır (YOLDA) */
+  initialDurum?: GorevDurum;
+  /** ATANDI pinine ek başlangıç pinleri (örn. DOLU_CIKTIM) */
+  ekPinler?: PinTip[];
 }): Promise<string> {
   const now = new Date().toISOString();
-  const pins: GorevPin[] = [{ tip: 'ATANDI', at: now, by: 'Sistem' }];
+  const pins: GorevPin[] = [
+    { tip: 'ATANDI', at: now, by: 'Sistem' },
+    ...(data.ekPinler || []).map((tip) => ({ tip, at: now, by: data.soforAd || 'Sistem' })),
+  ];
   const payload = {
-    ...data,
-    durum: 'YENI' as GorevDurum,
+    vehicleId: data.vehicleId,
+    tip: data.tip,
+    fromId: data.fromId,
+    toId: data.toId,
+    dolu: data.dolu,
+    km: data.km,
+    soforUid: data.soforUid,
+    soforAd: data.soforAd,
+    not: data.not,
+    durum: (data.initialDurum || 'YENI') as GorevDurum,
     pins,
     createdAt: now,
     updatedAt: now,
@@ -121,20 +151,36 @@ export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum,
 }
 
 /**
- * İstasyon araç çağırır: kural — ihtiyaç anında boşta olan İLK araç düşer.
- * vehicleIdOverride verilirse o araç atanır. Boşta araç yoksa 'BOS_YOK' döner.
+ * İstasyon araç çağırır. Atama kuralı:
+ *   • vehicleIdOverride verilirse o araç atanır (yönetici manuel atama)
+ *   • verilmezse BOŞTA olan araçlar arasından çağıran istasyona EN YAKIN olanı otomatik düşer
+ *     (mesafe verisi yoksa araç koduna göre ilk boşta araç)
+ * Boşta araç yoksa 'BOS_YOK' döner.
  */
 export async function istasyondanAracCagir(
   toStationId: string,
   vehicleIdOverride?: string | null,
   byAd?: string,
 ): Promise<{ vehicleId: string } | 'BOS_YOK'> {
-  const [vehicles, gorevler] = await Promise.all([list('vehicles'), list('gorevler')]);
+  const [vehicles, gorevler, distances] = await Promise.all([
+    list('vehicles'), list('gorevler'), list('distances'),
+  ]);
   const uygun = (vehicles as Vehicle[]).filter((v) => v.status === 'AKTIF');
-  const secilen = vehicleIdOverride
-    ? uygun.find((v) => v.id === vehicleIdOverride) || null
-    : uygun.filter((v) => isBosArac(v.id, gorevler as Gorev[]))
-        .sort((a, b) => (a.code || '').localeCompare(b.code || '', 'tr'))[0] || null;
+  let secilen: Vehicle | null = null;
+  if (vehicleIdOverride) {
+    secilen = uygun.find((v) => v.id === vehicleIdOverride) || null;
+  } else {
+    const boslar = uygun.filter((v) => isBosArac(v.id, gorevler as Gorev[]));
+    const kmTo = (v: Vehicle): number | null =>
+      distanceBetween(distances as Distance[], aracinStasyonu(v, gorevler as Gorev[]), toStationId);
+    secilen = boslar.sort((a, b) => {
+      const da = kmTo(a), dbs = kmTo(b);
+      if (da != null && dbs != null && da !== dbs) return da - dbs;
+      if (da == null && dbs != null) return 1;
+      if (da != null && dbs == null) return -1;
+      return (a.code || '').localeCompare(b.code || '', 'tr');
+    })[0] || null;
+  }
   if (!secilen) return 'BOS_YOK';
   const sofor = await soforOfVehicle(secilen.id);
   await createGorev({

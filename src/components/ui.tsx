@@ -98,7 +98,7 @@ export const DirectionBadge = ({ d }: { d: ShipDirection | string }) =>
   b(d === 'GELEN' ? 'yon-gelen' : 'yon-giden', d === 'GELEN' ? 'Gelen' : 'Giden');
 export const GorevDurumBadge = ({ s }: { s: GorevDurum | string }) => {
   const map: Record<string, string> = {
-    YENI: 'st-beklemede', YOLDA: 'st-planlandi', ISTASYONDA: 'st-onaylandi',
+    YENI: 'st-beklemede', YOLDA: 'st-planlandi', DONUS_YOLDA: 'st-planlandi', ISTASYONDA: 'st-onaylandi',
     BEKLIYOR: 'st-iptal', TAMAMLANDI: 'st-tamamlandi', IPTAL: 'st-iptal',
   };
   return b(map[String(s)] || 'st-taslak', GOREV_DURUM[s as GorevDurum] || s);

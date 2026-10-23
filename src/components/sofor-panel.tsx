@@ -2,14 +2,19 @@
 // ============================================================
 // ŞOFÖR MOBİL PANELİ — sabit hat araçları için
 // Şoför giriş yapınca doğrudan bu paneli görür (masaüstü kabuğu yok).
-//   • Kendine atanan görevleri görür (hangi istasyondan → hangi istasyona)
-//   • Pin basar: Çıktım → Vardım (yer dolu/boş) → İş tamam
-//   • İstasyon çağrıları da aynı panelde görünür
+//
+// DOLU HAT TURU AKIŞI (bir görev = bir tur: dolu gidiş + boş dönüş):
+//   Dolu tur başlat → [Dolu yola çıktım] → [Vardım — dolu, indirme bekliyorum]
+//   → [İndirme tamam — Hedef istasyona yola çıktım]
+//   → [Hedef istasyona vardım] → [Yükleme tamam — Dolu yola çıktım]
+//     (mevcut tur TAMAMLANDI olur + yeni dolu tur OTOMATİK açılır)
+//   veya [Bugünlük iş bitti] ile tur kapatılır.
 // ============================================================
 import { useMemo, useState } from 'react';
 import { createGorev, distanceBetween, gorevPin, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
+import { gorevDonusVar } from '@/lib/types';
 import type { Distance, Gorev, GorevDurum, PinTip, UserProfile } from '@/lib/types';
 import Icon from './Icon';
 import { useToast } from './toast';
@@ -38,6 +43,11 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
   const vehicle = (vehicles || []).find((v) => v.id === vehicleId) || null;
   const stName = (id?: string | null) => (stations || []).find((s) => s.id === id)?.name || '—';
   const kmOf = (g: Gorev) => distanceBetween((distances || []) as Distance[], g.fromId, g.toId);
+  // CAGRI görevlerinin yüklediği nokta yoktur → "X çağrısı" olarak yazılır.
+  const yolYaz = (g: Gorev) =>
+    g.tip === 'CAGRI' || !g.fromId
+      ? `${stName(g.toId)} çağrısı`
+      : `${stName(g.fromId)} → ${stName(g.toId)}`;
 
   const mine = useMemo(
     () => (gorevler || []).filter((g) => g.vehicleId === vehicleId),
@@ -50,11 +60,35 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
     .filter((g) => g.durum === 'TAMAMLANDI' && (g.updatedAt || '').slice(0, 10) === today())
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 
+  // Bugün kat edilen yol: tek yön × (dönüş varsa 2)
+  const bugunKm = doneToday.reduce((t, g) => {
+    const km = kmOf(g);
+    if (km == null) return t;
+    return t + km * (gorevDonusVar(g) ? 2 : 1);
+  }, 0);
+
   async function pin(g: Gorev, tip: PinTip, durum: GorevDurum) {
     setBusy(g.id || 'x');
     try {
       await gorevPin(g, tip, durum, user.displayName);
       toast('Pin atıldı: ' + PIN_LABEL[tip]);
+    } catch (e) { toast(fbErr(e), 'error'); }
+    finally { setBusy(null); }
+  }
+
+  /** Yükleme bitti: mevcut turu tamamla + aynı hat için yeni dolu turu YOLDA durumunda aç. */
+  async function turDevam(g: Gorev) {
+    setBusy(g.id || 'x');
+    try {
+      await gorevPin(g, 'TAMAM', 'TAMAMLANDI', user.displayName);
+      await createGorev({
+        vehicleId: g.vehicleId, tip: 'HAT',
+        fromId: g.fromId, toId: g.toId, dolu: true,
+        soforUid: g.soforUid || user.uid, soforAd: g.soforAd || user.displayName,
+        not: 'Tur zinciri — yükleme tamam, dolu yola çıkıldı',
+        initialDurum: 'YOLDA', ekPinler: ['DOLU_CIKTIM'],
+      });
+      toast('Tur tamamlandı — yeni dolu tur açıldı, iyi işler!');
     } catch (e) { toast(fbErr(e), 'error'); }
     finally { setBusy(null); }
   }
@@ -68,7 +102,7 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
         fromId: vehicle.sabitFromId, toId: vehicle.sabitToId,
         dolu, soforUid: user.uid, soforAd: user.displayName,
       });
-      toast(dolu ? 'Dolu tur açıldı — iyi işler!' : 'Boş tur açıldı');
+      toast(dolu ? 'Dolu tur açıldı — yola çıkınca "Dolu yola çıktım" pinini atın' : 'Boş tur açıldı');
     } catch (e) { toast(fbErr(e), 'error'); }
     finally { setBusy(null); }
   }
@@ -148,7 +182,8 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
           </div></div>
         ) : (
           open.map((g) => (
-            <GorevCard key={g.id} g={g} busy={busy === g.id} stName={stName} km={kmOf(g)} onPin={pin} />
+            <GorevCard key={g.id} g={g} busy={busy === g.id} stName={stName} km={kmOf(g)} yolYaz={yolYaz}
+              onPin={pin} onDevam={turDevam} />
           ))
         )}
 
@@ -174,7 +209,7 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
         {/* Bugün özet + geçmiş */}
         <div style={{ marginTop: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: .4, color: '#5d6f84', textTransform: 'uppercase', margin: '0 0 8px' }}>
-            Bugün — {doneToday.length} tur tamamlandı
+            Bugün — {doneToday.length} tur tamamlandı{bugunKm > 0 ? ` · ~${fmtKm(bugunKm)} yol` : ''}
           </div>
           {doneToday.length === 0 ? (
             <div className="card"><div className="card-body" style={{ fontSize: 12.5, color: 'var(--muted)' }}>Bugün tamamlanan tur yok.</div></div>
@@ -185,7 +220,7 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12.5, fontWeight: 700 }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Icon name="checkCircle" size={14} />
-                      {stName(g.fromId)} → {stName(g.toId)}
+                      {yolYaz(g)}
                     </span>
                     <span style={{ color: 'var(--muted)', fontWeight: 500 }}>{g.updatedAt ? fmtDT(g.updatedAt) : ''}</span>
                   </div>
@@ -210,18 +245,28 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
 }
 
 /* ---------------- Tek görev kartı + pin butonları ---------------- */
-function GorevCard({ g, busy, stName, km, onPin }: {
+function GorevCard({ g, busy, stName, km, yolYaz, onPin, onDevam }: {
   g: Gorev;
   busy: boolean;
   stName: (id?: string | null) => string;
   km: number | null;
+  yolYaz: (g: Gorev) => string;
   onPin: (g: Gorev, tip: PinTip, durum: GorevDurum) => void;
+  onDevam: (g: Gorev) => void;
 }) {
   const cagri = g.tip === 'CAGRI';
-  const yon = cagri
-    ? `${stName(g.toId)} istasyonuna gidilecek`
-    : `${stName(g.fromId)} → ${stName(g.toId)}`;
+  const doluHat = g.tip === 'HAT' && !!g.dolu;
   const btnStyle: React.CSSProperties = { padding: '14px 12px', fontSize: 14.5, fontWeight: 800, borderRadius: 12, whiteSpace: 'normal', textAlign: 'center' };
+
+  // Duruma göre bir sonraki adım açıklaması
+  const adim = !cagri && doluHat ? ({
+    YENI: 'Yükleme bitince "Dolu yola çıktım" pinini atın',
+    YOLDA: 'Yola çıktınız — varınca pin atın',
+    BEKLIYOR: 'İndirme bitince dönüş pinini atın',
+    DONUS_YOLDA: `Boş dönüştesiniz — ${stName(g.fromId)} için yolda`,
+    ISTASYONDA: 'Yükleme istasyonundasınız — yükleme bitince yeni tur açılır',
+  } as Record<string, string>)[g.durum] : null;
+
   return (
     <div className="card" style={{ marginBottom: 10, border: cagri ? '2px solid #f59e0b' : undefined }}>
       <div className="card-body" style={{ padding: '12px 14px' }}>
@@ -237,12 +282,17 @@ function GorevCard({ g, busy, stName, km, onPin }: {
         </div>
 
         <div style={{ fontSize: 15.5, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7, lineHeight: 1.35 }}>
-          <Icon name="mappin" size={15} />{yon}
+          <Icon name="mappin" size={15} />{yolYaz(g)}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {km != null && <span>Mesafe: {fmtKm(km)}</span>}
+          {km != null && <span>Tek yön: {fmtKm(km)}</span>}
           <span>Atandı: {g.createdAt ? fmtDT(g.createdAt) : '—'}</span>
         </div>
+        {adim && (
+          <div style={{ fontSize: 11.5, marginTop: 6, background: '#eff6ff', color: '#1d4ed8', borderRadius: 8, padding: '6px 9px', fontWeight: 600 }}>
+            {adim}
+          </div>
+        )}
         {g.not && <div style={{ fontSize: 12, marginTop: 5, color: 'var(--muted)' }}>Not: {g.not}</div>}
 
         {/* Pin geçmişi */}
@@ -258,18 +308,22 @@ function GorevCard({ g, busy, stName, km, onPin }: {
 
         {/* Duruma göre pin butonları */}
         <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
-          {g.durum === 'YENI' && (
+          {g.durum === 'YENI' && (doluHat ? (
+            <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'DOLU_CIKTIM', 'YOLDA')}>
+              <Icon name="truck" size={17} /> Dolu yola çıktım
+            </button>
+          ) : (
             <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'CIKTIM', 'YOLDA')}>
               <Icon name="truck" size={17} /> Çıktım — Yola çıktım
             </button>
-          )}
-          {g.durum === 'YOLDA' && (g.dolu ? (
+          ))}
+          {g.durum === 'YOLDA' && (doluHat ? (
             <>
               <button className="btn" style={{ ...btnStyle, background: '#dc2626' }} disabled={busy} onClick={() => onPin(g, 'VARDIM_DOLU', 'BEKLIYOR')}>
                 <Icon name="clock" size={17} /> Vardım — Dolu, indirme bekliyorum
               </button>
-              <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'VARDIM_BOS', 'ISTASYONDA')}>
-                <Icon name="checkCircle" size={17} /> Vardım — Yer boş
+              <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'VARDIM_BOS', 'DONUS_YOLDA')}>
+                <Icon name="checkCircle" size={17} /> Vardım — Yer boş (dönüşe geç)
               </button>
             </>
           ) : (
@@ -277,16 +331,34 @@ function GorevCard({ g, busy, stName, km, onPin }: {
               <Icon name="checkCircle" size={17} /> Vardım — İstasyonda oldum
             </button>
           ))}
-          {g.durum === 'BEKLIYOR' && (
+          {g.durum === 'BEKLIYOR' && (doluHat ? (
+            <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'DONUS_CIKTIM', 'DONUS_YOLDA')}>
+              <Icon name="route" size={17} /> İndirme tamam — Hedef istasyona yola çıktım
+            </button>
+          ) : (
             <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'TAMAM', 'TAMAMLANDI')}>
               <Icon name="check" size={17} /> İndirme tamam — İş bitti
             </button>
+          ))}
+          {g.durum === 'DONUS_YOLDA' && (
+            <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'HEDEF_VARDIM', 'ISTASYONDA')}>
+              <Icon name="mappin" size={17} /> Hedef istasyona vardım
+            </button>
           )}
-          {g.durum === 'ISTASYONDA' && (
+          {g.durum === 'ISTASYONDA' && (doluHat ? (
+            <>
+              <button className="btn" style={btnStyle} disabled={busy} onClick={() => onDevam(g)}>
+                <Icon name="truck" size={17} /> Yükleme tamam — Dolu yola çıktım
+              </button>
+              <button className="btn secondary" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'TAMAM', 'TAMAMLANDI')}>
+                <Icon name="check" size={17} /> Bugünlük iş bitti
+              </button>
+            </>
+          ) : (
             <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'TAMAM', 'TAMAMLANDI')}>
               <Icon name="check" size={17} /> İş bitti
             </button>
-          )}
+          ))}
         </div>
       </div>
     </div>

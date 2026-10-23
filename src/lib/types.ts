@@ -56,8 +56,21 @@ export interface Vehicle {
 
 /* ---------------- Görevler (şoför paneli / araç takip) ---------------- */
 export type GorevTip = 'HAT' | 'CAGRI';
-export type GorevDurum = 'YENI' | 'YOLDA' | 'ISTASYONDA' | 'BEKLIYOR' | 'TAMAMLANDI' | 'IPTAL';
-export type PinTip = 'ATANDI' | 'CIKTIM' | 'ISTASYONDA' | 'VARDIM_BOS' | 'VARDIM_DOLU' | 'TAMAM' | 'IPTAL';
+/**
+ * Görev durum akışı (dolu hat turu):
+ *   YENI → YOLDA (dolu yola çıktım) → BEKLIYOR (vardım dolu, indirme bekliyorum)
+ *   → DONUS_YOLDA (indirme tamam, hedef istasyona yola çıktım)
+ *   → ISTASYONDA (hedef istasyona vardım) → TAMAMLANDI (yükleme bitince yeni dolu tur açılır)
+ */
+export type GorevDurum = 'YENI' | 'YOLDA' | 'DONUS_YOLDA' | 'ISTASYONDA' | 'BEKLIYOR' | 'TAMAMLANDI' | 'IPTAL';
+export type PinTip =
+  | 'ATANDI' | 'CIKTIM'
+  | 'DOLU_CIKTIM'    // dolu yola çıktım (yükleme bitti, yola çıkıldı)
+  | 'VARDIM_DOLU'    // vardım — dolu, indirme bekliyorum
+  | 'VARDIM_BOS'     // vardım — yer boş (indirme yapılamadı, dönüşe geçildi)
+  | 'DONUS_CIKTIM'   // indirme tamam — hedef istasyona yola çıktım (boş dönüş)
+  | 'HEDEF_VARDIM'   // hedef (yükleme) istasyona vardım
+  | 'ISTASYONDA' | 'TAMAM' | 'IPTAL';
 
 export interface GorevPin {
   tip: PinTip;
@@ -81,6 +94,11 @@ export interface Gorev {
   not?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Görev pinlerinden dönüş bacağı (boş dönüş) yapılmış mı? */
+export function gorevDonusVar(g: Pick<Gorev, 'pins'>): boolean {
+  return (g.pins || []).some((p) => p.tip === 'DONUS_CIKTIM' || p.tip === 'HEDEF_VARDIM');
 }
 
 export type ReqStatus = 'BEKLEMEDE' | 'ONAYLANDI' | 'PLANLANDI' | 'TAMAMLANDI' | 'IPTAL';

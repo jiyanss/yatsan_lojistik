@@ -1,11 +1,13 @@
 'use client';
 // Raporlar — dönemsel KPI, grafikler ve CSV çıktıları
+// Sabit hat turları ve mesafeler: şoför pinlerinden oluşan GERÇEK görev kayıtlarından hesaplanır.
 import { useMemo, useState } from 'react';
-import { computeRoute, today } from '@/lib/db';
+import { computeRoute, distanceBetween, today } from '@/lib/db';
 import { ROUTE_STATUS } from '@/lib/constants';
 import { addDaysISO, fmtDate, fmtKm } from '@/lib/format';
 import { exportCSV } from '@/lib/csv';
-import type { Distance, RoutePlan, Station, TransportRequest, Vehicle } from '@/lib/types';
+import { gorevDonusVar } from '@/lib/types';
+import type { Distance, Gorev, RoutePlan, Station, TransportRequest, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
 import { BarChart, DonutChart, HBarChart } from '@/components/charts';
 import { useCollections } from '@/hooks/useData';
@@ -13,7 +15,7 @@ import type { ViewCtx } from './context';
 
 export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
   void ctx;
-  const data = useCollections(['requests', 'routes', 'vehicles', 'stations', 'distances']);
+  const data = useCollections(['requests', 'routes', 'vehicles', 'stations', 'distances', 'gorevler']);
   const [from, setFrom] = useState(addDaysISO(today(), -6));
   const [to, setTo] = useState(today());
 
@@ -22,6 +24,7 @@ export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
   const vehicles = (data?.vehicles || []) as Vehicle[];
   const stations = (data?.stations || []) as Station[];
   const distances = (data?.distances || []) as Distance[];
+  const gorevler = (data?.gorevler || []) as Gorev[];
   const ready = !!data;
 
   const stById = useMemo(() => Object.fromEntries(stations.map((s) => [s.id, s])), [stations]);
@@ -72,6 +75,48 @@ export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
 
     return { totalKm, loadedKm, emptyKm, emptyPct, completed, rate, labels, v1, v2, topSt, vehRows, prItems };
   }, [rt, rq, distances, from, to, requests, stById, vById]);
+
+  /* ---- Gerçekleşen görevler (şoför pinlerinden): tur sayısı + kat edilen mesafe ---- */
+  const gvAgg = useMemo(() => {
+    const gunluk = (g: Gorev) => (g.updatedAt || g.createdAt || '').slice(0, 10);
+    const gv = gorevler.filter((g) => g.durum === 'TAMAMLANDI' && gunluk(g) >= from && gunluk(g) <= to);
+
+    const hatMap = new Map<string, { fromId: string; toId: string; tur: number; doluTur: number; doluKm: number; bosKm: number }>();
+    const vehMap = new Map<string, { tur: number; km: number }>();
+    let toplamKm = 0, doluKmToplam = 0, bosKmToplam = 0, cagriSayi = 0;
+
+    for (const g of gv) {
+      const km = distanceBetween(distances, g.fromId, g.toId);
+      const donus = gorevDonusVar(g); // pinlerinde dönüş bacağı var mı?
+      const doluKm = g.dolu && km != null ? km : 0;
+      const bosKm = km != null ? (g.dolu ? 0 : km) + (donus ? km : 0) : 0;
+      toplamKm += doluKm + bosKm;
+      doluKmToplam += doluKm;
+      bosKmToplam += bosKm;
+      if (g.tip === 'CAGRI') { cagriSayi++; continue; }
+      const key = `${g.fromId || ''}|${g.toId || ''}`;
+      const row = hatMap.get(key) || { fromId: g.fromId || '', toId: g.toId || '', tur: 0, doluTur: 0, doluKm: 0, bosKm: 0 };
+      row.tur++;
+      if (g.dolu) row.doluTur++;
+      row.doluKm += doluKm;
+      row.bosKm += bosKm;
+      hatMap.set(key, row);
+      const vr = vehMap.get(g.vehicleId) || { tur: 0, km: 0 };
+      vr.tur++; vr.km += doluKm + bosKm;
+      vehMap.set(g.vehicleId, vr);
+    }
+
+    const hatAdi = (r: { fromId: string; toId: string }) =>
+      `${stById[r.fromId]?.name || '?'} → ${stById[r.toId]?.name || '?'}`;
+    const hatRows = [...hatMap.values()]
+      .map((r) => ({ ...r, hat: hatAdi(r), toplamKm: r.doluKm + r.bosKm }))
+      .sort((a, b) => b.toplamKm - a.toplamKm);
+    const vehRows = [...vehMap.entries()]
+      .map(([id, x]) => ({ code: vById[id]?.code || '?', ...x }))
+      .sort((a, b) => b.km - a.km);
+
+    return { hatTur: gv.length - cagriSayi, cagriSayi, toplamKm, doluKmToplam, bosKmToplam, hatRows, vehRows };
+  }, [gorevler, distances, from, to, stById, vById]);
 
   return (
     <>
@@ -137,12 +182,87 @@ export default function ReportsView({ ctx }: { ctx: ViewCtx }) {
               </div>
             </div>
             <div className="card">
-              <div className="card-head"><h3>Araç bazlı toplam km</h3></div>
+              <div className="card-head"><h3>Araç bazlı toplam km</h3><span className="hint">rota planlarından</span></div>
               <div className="card-body">
                 {agg.vehRows.length
                   ? <HBarChart labels={agg.vehRows.map((x) => x.code)} values={agg.vehRows.map((x) => Math.round(x.km))} unit=" m" />
                   : <div style={{ color: 'var(--faint)', fontSize: 12.5 }}>Veri yok</div>}
               </div>
+            </div>
+          </div>
+
+          {/* ---- GERÇEKLEŞEN TURLAR: şoför pinlerinden (sabit hat) ---- */}
+          <div className="kpi-grid" style={{ marginTop: 14 }}>
+            <div className="kpi tint-violet">
+              <div className="k-ico"><Icon name="truck" size={16} /></div>
+              <div className="k-val">{gvAgg.hatTur}</div><div className="k-label">Sabit hat turu (gerçekleşen)</div>
+              <div className="k-sub">şoför pinlerinden</div>
+            </div>
+            <div className="kpi">
+              <div className="k-ico"><Icon name="alert" size={16} /></div>
+              <div className="k-val">{gvAgg.cagriSayi}</div><div className="k-label">İstasyon çağrısı</div>
+            </div>
+            <div className="kpi">
+              <div className="k-ico"><Icon name="route" size={16} /></div>
+              <div className="k-val">{fmtKm(gvAgg.toplamKm)}</div><div className="k-label">Görevlerden kat edilen yol</div>
+              <div className="k-sub">{fmtKm(gvAgg.doluKmToplam)} dolu · {fmtKm(gvAgg.bosKmToplam)} boş</div>
+            </div>
+          </div>
+
+          <div className="grid-2">
+            <div className="card">
+              <div className="card-head"><h3>Rotada yapılan turlar</h3><span className="hint">hat bazında</span></div>
+              <div className="card-body">
+                {gvAgg.hatRows.length
+                  ? <HBarChart labels={gvAgg.hatRows.map((r) => r.hat)} values={gvAgg.hatRows.map((r) => r.tur)} />
+                  : <div style={{ color: 'var(--faint)', fontSize: 12.5 }}>Veri yok</div>}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-head"><h3>Araç bazlı gerçekleşen km</h3><span className="hint">görev kayıtlarından</span></div>
+              <div className="card-body">
+                {gvAgg.vehRows.length
+                  ? <HBarChart labels={gvAgg.vehRows.map((x) => x.code)} values={gvAgg.vehRows.map((x) => Math.round(x.km))} unit=" m" />
+                  : <div style={{ color: 'var(--faint)', fontSize: 12.5 }}>Veri yok</div>}
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-head">
+              <h3>Sabit hat tur ve mesafe tablosu</h3><span className="spacer" />
+              <button className="btn sm secondary" onClick={() => exportCSV(`hat_turlari_${from}_${to}`,
+                ['Hat', 'Tur Sayısı', 'Dolu Tur', 'Dolu m', 'Boş m', 'Toplam m'],
+                gvAgg.hatRows.map((r) => [r.hat, r.tur, r.doluTur, r.doluKm, r.bosKm, r.toplamKm]))
+              }><Icon name="download" size={13} /> CSV</button>
+            </div>
+            <div className="card-body flush">
+              {gvAgg.hatRows.length ? (
+                <div className="table-wrap"><table className="tbl">
+                  <thead><tr>
+                    <th>Hat (yükleme → boşaltma)</th><th className="num">Tur</th><th className="num">Dolu tur</th>
+                    <th className="num">Dolu</th><th className="num">Boş</th><th className="num">Toplam</th>
+                  </tr></thead>
+                  <tbody>
+                    {gvAgg.hatRows.map((r, i) => (
+                      <tr key={i}>
+                        <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <b>{r.hat}</b>
+                        </td>
+                        <td className="num">{r.tur}</td>
+                        <td className="num">{r.doluTur}</td>
+                        <td className="num">{fmtKm(r.doluKm)}</td>
+                        <td className="num">{fmtKm(r.bosKm)}</td>
+                        <td className="num"><b>{fmtKm(r.toplamKm)}</b></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table></div>
+              ) : (
+                <div style={{ padding: 26, textAlign: 'center', color: 'var(--faint)', fontSize: 13 }}>
+                  Bu dönemde tamamlanmış sabit hat turu yok
+                </div>
+              )}
             </div>
           </div>
 

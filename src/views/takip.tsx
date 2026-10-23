@@ -3,10 +3,10 @@
 // ARAÇ TAKİP — canlı araç durumları + istasyon araç çağırma
 //   • Her araç: boşta / yolda / istasyonda / dolu bekliyor
 //   • Şoförün bastığı pinler canlı görünür
-//   • İstasyon ihtiyacında ilk boşta araca görev otomatik düşer
+//   • İstasyon ihtiyacında görev, çağıran istasyona EN YAKIN boşta araca otomatik düşer (veya yönetici elle atar)
 // ============================================================
 import { useMemo, useState } from 'react';
-import { createGorev, gorevPin, isBosArac, istasyondanAracCagir, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
+import { createGorev, distanceBetween, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_DURUM, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
 import type { Distance, Gorev, UserProfile, Vehicle } from '@/lib/types';
@@ -55,7 +55,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
 
   const aktif = sorted.filter((v) => v.status === 'AKTIF');
   const bosSayi = aktif.filter((v) => isBosArac(v.id, gorevler)).length;
-  const yoldaSayi = aktif.filter((v) => openGorev(v.id)?.durum === 'YOLDA').length;
+  const yoldaSayi = aktif.filter((v) => ['YOLDA', 'DONUS_YOLDA'].includes(openGorev(v.id)?.durum || '')).length;
   const istasyondaSayi = aktif.filter((v) => ['ISTASYONDA', 'BEKLIYOR'].includes(openGorev(v.id)?.durum || '')).length;
   const yeniSayi = aktif.filter((v) => openGorev(v.id)?.durum === 'YENI').length;
 
@@ -97,8 +97,9 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   return (
     <>
       <Note type="info">
-        Şoförler mobil panellerinden <b>Çıktım / Vardım</b> pinlerini basar; durumlar burada anında görünür.
-        İstasyon bir araç istediğinde görev <b>boşta olan ilk araca</b> otomatik düşer.
+        Şoförler mobil panellerinden pinleri basar: <b>Dolu yola çıktım → Vardım dolu → Hedef istasyona yola çıktım →
+        Hedef istasyona vardım → Yükleme tamam</b>; durumlar burada anında görünür. İstasyon bir araç istediğinde görev
+        <b> çağıran istasyona en yakın boşta araca</b> otomatik düşer; dilerseniz aracı elle de seçebilirsiniz.
       </Note>
 
       <div className="toolbar">
@@ -162,7 +163,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                         {g.tip === 'CAGRI' ? `${stName(g.toId)} çağrısı` : `${stName(g.fromId)} → ${stName(g.toId)}`}
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
-                        {g.durum === 'YOLDA' ? 'Yolda — ' : g.durum === 'BEKLIYOR' ? `${stName(g.toId)} · dolu bekliyor — ` : g.durum === 'ISTASYONDA' ? `${stName(g.toId)} · istasyonda — ` : g.durum === 'YENI' ? 'Henüz çıkmadı — ' : ''}
+                        {g.durum === 'YOLDA' ? 'Yolda — ' : g.durum === 'DONUS_YOLDA' ? `${stName(g.fromId)} · dönüşte (boş) — ` : g.durum === 'BEKLIYOR' ? `${stName(g.toId)} · dolu bekliyor — ` : g.durum === 'ISTASYONDA' ? `${stName(g.toId)} · istasyonda — ` : g.durum === 'YENI' ? 'Henüz çıkmadı — ' : ''}
                         Son pin: {lastPin ? `${PIN_LABEL[lastPin.tip] || lastPin.tip} (${fmtDT(lastPin.at)})` : '—'}
                       </div>
                       {ctx.canEdit && (
@@ -225,6 +226,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
           stations={stations}
           vehicles={sorted}
           gorevler={gorevler}
+          distances={distances}
           busy={busy}
           onSubmit={cagriYap}
         />
@@ -242,17 +244,22 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
 }
 
 /* ---------------- İstasyondan araç çağırma ---------------- */
-function CagriModal({ onClose, stations, vehicles, gorevler, busy, onSubmit }: {
+function CagriModal({ onClose, stations, vehicles, gorevler, distances, busy, onSubmit }: {
   onClose: () => void;
   stations: { id: string; code: string; name: string }[];
   vehicles: Vehicle[];
   gorevler: Gorev[];
+  distances: Distance[];
   busy: boolean;
   onSubmit: (stationId: string, vehicleId: string | null) => void;
 }) {
   const [stationId, setStationId] = useState('');
-  const [vehicleId, setVehicleId] = useState(''); // '' = ilk boşta araç
+  const [vehicleId, setVehicleId] = useState(''); // '' = en yakın boşta araç
   const aktif = vehicles.filter((v) => v.status === 'AKTIF');
+  const stAd = (id?: string | null) => {
+    const s = stations.find((x) => x.id === id);
+    return s ? `${s.code} · ${s.name}` : 'bilinmiyor';
+  };
   return (
     <Modal title="İstasyondan Araç Çağır" onClose={onClose}
       footer={
@@ -264,7 +271,10 @@ function CagriModal({ onClose, stations, vehicles, gorevler, busy, onSubmit }: {
         </>
       }
     >
-      <Note type="info">Görev, seçtiğiniz istasyona gitmesi için <b>boşta olan ilk araca</b> otomatik düşer.</Note>
+      <Note type="info">
+        Görev varsayılan olarak <b>çağıran istasyona en yakın boşta araca</b> otomatik düşer;
+        yönetici istersen aşağıdan aracı <b>elle seçebilir</b> (meşgul araç da seçilebilir).
+      </Note>
       <div className="field" style={{ marginTop: 10 }}>
         <label>Çağıran İstasyon <span className="req">*</span></label>
         <select value={stationId} onChange={(e) => setStationId(e.target.value)}>
@@ -274,10 +284,14 @@ function CagriModal({ onClose, stations, vehicles, gorevler, busy, onSubmit }: {
       <div className="field">
         <label>Araç</label>
         <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
-          <option value="">İlk boşta araç (otomatik)</option>
+          <option value="">En yakın boşta araç (otomatik)</option>
           {aktif.map((v) => {
             const bos = isBosArac(v.id, gorevler);
-            return <option key={v.id} value={v.id}>{v.code} {v.name ? `· ${v.name}` : ''} {bos ? '— boşta' : '— meşgul'}</option>;
+            const konum = aracinStasyonu(v, gorevler);
+            const km = stationId ? distanceBetween(distances, konum, stationId) : null;
+            return <option key={v.id} value={v.id}>
+              {v.code}{v.name ? ` · ${v.name}` : ''} — {stAd(konum)}{km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
+            </option>;
           })}
         </select>
       </div>
@@ -349,7 +363,8 @@ function GorevVerModal({ v, onClose, stations, users }: {
         </label>
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-        Durum akışı: Yeni görev → Çıktım → Vardım (yer dolu/boş) → İş tamam. Şoför pinleri Araç Takip sayfasında canlı izlenir.
+        Durum akışı: Yeni görev → Dolu yola çıktım → Vardım (dolu / yer boş) → Hedef istasyona yola çıktım (dönüş) →
+        Hedef istasyona vardım → Yükleme tamam (yeni tur). Şoför pinleri Araç Takip sayfasında canlı izlenir.
       </div>
     </Modal>
   );

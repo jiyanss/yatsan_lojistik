@@ -2,8 +2,11 @@
 // ============================================================
 // Yatsan İç Lojistik Planlama — ana uygulama
 // Giriş ekranı + kabuk + hash router (#/ozet, #/talepler, ...)
+// AppErrorBoundary: beklenmeyen bir render hatası tüm siteyi değil,
+// Türkçe açıklamalı kurtarma ekranını gösterir (beyaz ekran / Vercel
+// hatası yerine).
 // ============================================================
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { UserProfile } from '@/lib/types';
 import { getMode, initDB, onAuth, signOutUser } from '@/lib/db';
 import { findNav, Sidebar, Topbar } from '@/components/shell';
@@ -23,7 +26,43 @@ import SettingsView from '@/views/settings';
 import { useHashRoute } from '@/hooks/useData';
 import type { ViewCtx } from '@/views/context';
 
+class AppErrorBoundary extends Component<{ children: ReactNode }, { err: Error | null }> {
+  state = { err: null as Error | null };
+  static getDerivedStateFromError(err: Error) { return { err }; }
+  componentDidCatch(err: Error) { console.error('Uygulama hatası:', err); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+        <div style={{ maxWidth: 460, textAlign: 'center' }}>
+          <div style={{ fontSize: 34, marginBottom: 8 }}>⚠️</div>
+          <h1 style={{ fontSize: 18, fontWeight: 800, margin: '0 0 8px' }}>Bir şeyler ters gitti</h1>
+          <p style={{ fontSize: 13.5, color: '#5d6f84', lineHeight: 1.6 }}>
+            Sayfa beklenmeyen bir hata nedeniyle durdu. Aşağıdaki düğmeyle yenileyin;
+            sorun sürüyorsa yöneticinize bu mesajı iletin:
+          </p>
+          <pre style={{ fontSize: 11, background: '#f2f5f9', padding: 10, borderRadius: 8, overflow: 'auto', textAlign: 'left', whiteSpace: 'pre-wrap' }}>
+            {this.state.err.message}
+          </pre>
+          <button onClick={() => window.location.reload()}
+            style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 10, padding: '12px 22px', fontSize: 14, fontWeight: 800, cursor: 'pointer', marginTop: 6 }}>
+            Sayfayı yenile
+          </button>
+        </div>
+      </main>
+    );
+  }
+}
+
 export default function Home() {
+  return (
+    <AppErrorBoundary>
+      <AppInner />
+    </AppErrorBoundary>
+  );
+}
+
+function AppInner() {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [mode, setMode] = useState<'demo' | 'firebase'>('demo');

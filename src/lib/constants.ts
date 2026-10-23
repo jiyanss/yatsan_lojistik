@@ -43,7 +43,7 @@ export const ROLES: Record<Role, string> = {
 
 /* ---------------- Görev (şoför paneli / araç takip) etiketleri ---------------- */
 export const GOREV_DURUM: Record<GorevDurum, string> = {
-  YENI: 'Yeni görev', YOLDA: 'Yolda', ISTASYONDA: 'İstasyonda',
+  YENI: 'Yeni görev', YOLDA: 'Yolda', DONUS_YOLDA: 'Dönüşte (boş)', ISTASYONDA: 'İstasyonda',
   BEKLIYOR: 'Dolu bekliyor', TAMAMLANDI: 'Tamamlandı', IPTAL: 'İptal',
 };
 
@@ -55,9 +55,12 @@ export const GOREV_TIP: Record<GorevTip, string> = {
 export const PIN_LABEL: Record<PinTip, string> = {
   ATANDI: 'Görev atandı',
   CIKTIM: 'Çıktım — yolda',
-  ISTASYONDA: 'İstasyonda oldum',
-  VARDIM_BOS: 'Vardım — yer boş',
+  DOLU_CIKTIM: 'Dolu yola çıktım',
   VARDIM_DOLU: 'Vardım — dolu, indirme bekliyorum',
+  VARDIM_BOS: 'Vardım — yer boş',
+  DONUS_CIKTIM: 'Hedef istasyona yola çıktım',
+  HEDEF_VARDIM: 'Hedef istasyona vardım',
+  ISTASYONDA: 'İstasyonda oldum',
   TAMAM: 'İş tamam',
   IPTAL: 'İptal edildi',
 };
