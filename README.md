@@ -2,7 +2,7 @@
 
 React (Next.js 16 + TypeScript) ile geliştirilmiş iç lojistik planlama sistemi.
 **GitHub + Vercel + Firebase** üçlüsüyle çalışır; tüm denemeler Vercel üzerinden yapılabilir,
-lokalde çalıştırmak zorunlu değildir.
+lokalde çalıştırmak zorunlu değildir.test
 
 ## Modüller
 
