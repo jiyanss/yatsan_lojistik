@@ -6,11 +6,22 @@ import { useState, type FormEvent } from 'react';
 import { fbErr } from '@/lib/constants';
 import { DEMO_ACCOUNT } from '@/lib/demo-data';
 import { resetPassword, signIn, signUp } from '@/lib/db';
+import { FIREBASE_ENV_KEYS, getFirebaseConfig, type FirebaseConfig } from '@/lib/firebase';
 import { useToast } from './toast';
 import Icon from './Icon';
 
+const ENV_KEY_TO_CFG: Record<(typeof FIREBASE_ENV_KEYS)[number], keyof FirebaseConfig> = {
+  NEXT_PUBLIC_FIREBASE_API_KEY: 'apiKey',
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'authDomain',
+  NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'projectId',
+  NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'storageBucket',
+  NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: 'messagingSenderId',
+  NEXT_PUBLIC_FIREBASE_APP_ID: 'appId',
+};
+
 export default function AuthScreen({ isDemoMode }: { isDemoMode: boolean }) {
   const toast = useToast();
+  const cfg = getFirebaseConfig();
   const [tab, setTab] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -58,12 +69,33 @@ export default function AuthScreen({ isDemoMode }: { isDemoMode: boolean }) {
         </div>
 
         {isDemoMode && (
-          <div className="note warn" style={{ marginBottom: 16 }}>
+          <div className="note warn" style={{ marginBottom: 12 }}>
             <Icon name="alert" size={16} />
             <span>
               <b>Demo modu aktif.</b> Firebase yapılandırması girilmediği için veriler bu tarayıcıda saklanıyor.
               Canlıya geçiş için <b>NEXT_PUBLIC_FIREBASE_*</b> ortam değişkenlerini tanımlayın.
             </span>
+          </div>
+        )}
+
+        {isDemoMode && (
+          <div style={{ marginBottom: 16, border: '1px solid #d8e0ea', borderRadius: 10, padding: '10px 12px', fontSize: 12, background: '#f6f8fb' }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Teşhis — bu derlemede algılanan ortam değişkenleri</div>
+            {FIREBASE_ENV_KEYS.map((k) => {
+              const v = (cfg[ENV_KEY_TO_CFG[k]] || '') as string;
+              const ok = v.length > 0;
+              return (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', padding: '2px 0' }}>
+                  <span>{k.replace('NEXT_PUBLIC_FIREBASE_', '')}</span>
+                  <span style={{ color: ok ? '#1a7f37' : '#c62828', fontWeight: 700 }}>
+                    {ok ? `✔ girildi · ${v.length} karakter` : '✖ BOŞ'}
+                  </span>
+                </div>
+              );
+            })}
+            <div style={{ marginTop: 8, opacity: 0.85, lineHeight: 1.5 }}>
+              Hepsinin <b>✔</b> olması gerekir. <b>BOŞ</b> görünen varsa: Vercel → Settings → Environment Variables → <b>Project</b> sekmesinden yazımı kontrol edin, ardından <b>cache’siz</b> yeniden derleyin (Deployments → ⋯ → Redeploy → Use existing Build Cache kapalı).
+            </div>
           </div>
         )}
 
