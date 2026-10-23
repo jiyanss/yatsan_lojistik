@@ -6,10 +6,10 @@
 //   • İstasyon ihtiyacında görev, çağıran istasyona EN YAKIN boşta araca otomatik düşer (veya yönetici elle atar)
 // ============================================================
 import { useMemo, useState } from 'react';
-import { createGorev, distanceBetween, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
+import { createGorev, enKisaKm, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_DURUM, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
-import type { Distance, Gorev, UserProfile, Vehicle } from '@/lib/types';
+import type { Distance, Gorev, RoutePlan, UserProfile, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
 import { EmptyState, GorevDurumBadge, GorevTipBadge, Modal, VehicleStatusBadge, Note, confirmDialog, renderOpts } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -18,7 +18,7 @@ import type { ViewCtx } from './context';
 
 export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   const toast = useToast();
-  const data = useCollections(['vehicles', 'gorevler', 'stations', 'users', 'distances']);
+  const data = useCollections(['vehicles', 'gorevler', 'stations', 'users', 'distances', 'routes']);
   const [cagriOpen, setCagriOpen] = useState(false);
   const [gorevVer, setGorevVer] = useState<Vehicle | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,6 +28,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   const stations = (data?.stations || []) as { id: string; code: string; name: string }[];
   const users = (data?.users || []) as (UserProfile & { uid: string })[];
   const distances = (data?.distances || []) as Distance[];
+  const routes = (data?.routes || []) as RoutePlan[];
 
   const stName = (id?: string | null) => {
     const s = stations.find((x) => x.id === id);
@@ -227,6 +228,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
           vehicles={sorted}
           gorevler={gorevler}
           distances={distances}
+          routes={routes}
           busy={busy}
           onSubmit={cagriYap}
         />
@@ -238,6 +240,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
           stations={stations}
           users={users}
           distances={distances}
+          routes={routes}
         />
       )}
     </>
@@ -245,12 +248,13 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
 }
 
 /* ---------------- İstasyondan araç çağırma ---------------- */
-function CagriModal({ onClose, stations, vehicles, gorevler, distances, busy, onSubmit }: {
+function CagriModal({ onClose, stations, vehicles, gorevler, distances, routes, busy, onSubmit }: {
   onClose: () => void;
   stations: { id: string; code: string; name: string }[];
   vehicles: Vehicle[];
   gorevler: Gorev[];
   distances: Distance[];
+  routes: RoutePlan[];
   busy: boolean;
   onSubmit: (stationId: string, vehicleId: string | null) => void;
 }) {
@@ -289,7 +293,7 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, busy, on
           {aktif.map((v) => {
             const bos = isBosArac(v.id, gorevler);
             const konum = aracinStasyonu(v, gorevler);
-            const km = stationId ? distanceBetween(distances, konum, stationId) : null;
+            const km = stationId ? enKisaKm(distances, routes, konum, stationId) : null;
             return <option key={v.id} value={v.id}>
               {v.code}{v.name ? ` · ${v.name}` : ''} — {stAd(konum)}{km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
             </option>;
@@ -301,12 +305,13 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, busy, on
 }
 
 /* ---------------- Araca görev verme (sabit hat) ---------------- */
-function GorevVerModal({ v, onClose, stations, users, distances }: {
+function GorevVerModal({ v, onClose, stations, users, distances, routes }: {
   v: Vehicle;
   onClose: () => void;
   stations: { id: string; code: string; name: string }[];
   users: (UserProfile & { uid: string })[];
   distances: Distance[];
+  routes: RoutePlan[];
 }) {
   const toast = useToast();
   const [fromId, setFromId] = useState(v.sabitFromId || '');
@@ -323,7 +328,7 @@ function GorevVerModal({ v, onClose, stations, users, distances }: {
     try {
       await createGorev({
         vehicleId: v.id, tip: 'HAT', fromId, toId, dolu,
-        km: distanceBetween(distances, fromId, toId),
+        km: enKisaKm(distances, routes, fromId, toId),
         soforUid: sofor?.uid || null, soforAd: sofor?.displayName || null,
         not: `${atayan} atadı`,
       });

@@ -328,8 +328,11 @@ function GorevCard({ g, busy, stName, km, yolYaz, onPin, onDevam }: {
               </button>
             </>
           ) : (
-            <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'ISTASYONDA', 'ISTASYONDA')}>
-              <Icon name="checkCircle" size={17} /> Vardım — İstasyonda oldum
+            <button
+              className="btn" style={btnStyle} disabled={busy}
+              onClick={() => onPin(g, 'ISTASYONDA', cagri ? 'TAMAMLANDI' : 'ISTASYONDA')}
+            >
+              <Icon name="checkCircle" size={17} /> {cagri ? 'Vardım — Çağrı tamamlandı' : 'Vardım — İstasyonda oldum'}
             </button>
           ))}
           {g.durum === 'BEKLIYOR' && (doluHat ? (

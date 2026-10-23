@@ -11,7 +11,7 @@ import {
 import { deleteApp, initializeApp } from 'firebase/app';
 import {
   addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, getDocs,
-  onSnapshot, query, serverTimestamp, setDoc, writeBatch,
+  getFirestore, onSnapshot, query, serverTimestamp, setDoc, writeBatch,
 } from 'firebase/firestore';
 import { ensureFirebase, getFirebaseConfig, isFirebaseConfigured, type FbContext } from './firebase';
 import { fbErr } from './constants';
@@ -163,8 +163,8 @@ export async function istasyondanAracCagir(
   vehicleIdOverride?: string | null,
   byAd?: string,
 ): Promise<{ vehicleId: string } | 'BOS_YOK'> {
-  const [vehicles, gorevler, distances] = await Promise.all([
-    list('vehicles'), list('gorevler'), list('distances'),
+  const [vehicles, gorevler, distances, routes] = await Promise.all([
+    list('vehicles'), list('gorevler'), list('distances'), list('routes'),
   ]);
   const uygun = (vehicles as Vehicle[]).filter((v) => v.status === 'AKTIF');
   let secilen: Vehicle | null = null;
@@ -173,7 +173,7 @@ export async function istasyondanAracCagir(
   } else {
     const boslar = uygun.filter((v) => isBosArac(v.id, gorevler as Gorev[]));
     const kmTo = (v: Vehicle): number | null =>
-      distanceBetween(distances as Distance[], aracinStasyonu(v, gorevler as Gorev[]), toStationId);
+      enKisaKm(distances as Distance[], routes as RoutePlan[], aracinStasyonu(v, gorevler as Gorev[]), toStationId);
     secilen = boslar.sort((a, b) => {
       const da = kmTo(a), dbs = kmTo(b);
       if (da != null && dbs != null && da !== dbs) return da - dbs;
@@ -191,7 +191,7 @@ export async function istasyondanAracCagir(
     fromId: cikisIst,
     toId: toStationId,
     dolu: false,
-    km: distanceBetween(distances as Distance[], cikisIst, toStationId),
+    km: enKisaKm(distances as Distance[], routes as RoutePlan[], cikisIst, toStationId),
     soforUid: sofor?.uid || null,
     soforAd: sofor?.displayName || null,
     not: byAd ? `${byAd} tarafından çağrıldı` : null,
@@ -239,33 +239,41 @@ export async function adminCreateUser(p: {
     try { if (p.displayName) await updateProfile(cred.user, { displayName: p.displayName }); } catch { /* önemsiz */ }
     let profileOk = true;
     let profileErr = '';
-    // Profil yazımı ANA uygulama (yönetici oturumu) üzerinden yapılır.
-    // Kurallar yeni publish edildiyse bile geçici reddetmeler olabilir — 1 kez retry + doğrulama.
-    const profilYaz = async (): Promise<void> => {
-      await setDoc(doc(f.db, 'users', cred.user.uid), {
-        email: cred.user.email, displayName: p.displayName || email.split('@')[0],
-        role: p.role, vehicleId: p.vehicleId || null, createdAt: serverTimestamp(),
-      });
+    const profilPayload = {
+      email: cred.user.email, displayName: p.displayName || email.split('@')[0],
+      role: p.role, vehicleId: p.vehicleId || null, createdAt: serverTimestamp(),
     };
+    // 1. TERCİH: profili YENİ KULLANICININ KENDİ oturumuyla yaz — kurallardaki
+    //    "request.auth.uid == uid" (kendi profilini açma) izni HER ZAMAN geçerlidir;
+    //    yönetici yetkisi / isAdmin() kuralına hiç gerek kalmaz.
     try {
-      await profilYaz();
-    } catch (e) {
-      await new Promise((r) => setTimeout(r, 900)); // kurallar/kimlik token'ı için kısa bekleme
+      await setDoc(doc(getFirestore(app2), 'users', cred.user.uid), profilPayload);
+    } catch {
+      // 2. TERCİH: yönetici oturumuyla yaz (kuralda isAdmin() varsa çalışır).
+      //    Geçici reddetmelere karşı 1 kez retry + sonunda yazının gerçekten yapılıp yapılmadığını doğrula.
+      const profilYaz = async (): Promise<void> => {
+        await setDoc(doc(f.db, 'users', cred.user.uid), profilPayload);
+      };
       try {
         await profilYaz();
-      } catch (e2) {
-        // Yazım yine de reddedildiyse belki gerçekten yazılmıştır (yanıt kaybolmuş) — doğrula.
+      } catch (e) {
+        await new Promise((r) => setTimeout(r, 900)); // kurallar/kimlik token'ı için kısa bekleme
         try {
-          const snap = await getDoc(doc(f.db, 'users', cred.user.uid));
-          if (snap.exists()) {
-            profileOk = true;
-          } else {
+          await profilYaz();
+        } catch (e2) {
+          // Yazım yine de reddedildiyse belki gerçekten yazılmıştır (yanıt kaybolmuş) — doğrula.
+          try {
+            const snap = await getDoc(doc(f.db, 'users', cred.user.uid));
+            if (snap.exists()) {
+              profileOk = true;
+            } else {
+              profileOk = false;
+              profileErr = fbErr(e2);
+            }
+          } catch {
             profileOk = false;
             profileErr = fbErr(e2);
           }
-        } catch {
-          profileOk = false;
-          profileErr = fbErr(e2);
         }
       }
     }
@@ -510,6 +518,57 @@ export function distanceBetween(distances: Distance[], aId?: string | null, bId?
   const hit = distances.find((d) =>
     (d.fromId === aId && d.toId === bId) || (d.fromId === bId && d.toId === aId));
   return hit ? Number(hit.meters) : null;
+}
+
+/**
+ * İki istasyon arasındaki EN KISA yol mesafesi (metre):
+ *   1. distances koleksiyonundaki kayıtlar + rota planlarındaki bacak mesafeleri birleştirilir
+ *   2. aralarında doğrudan kayıt yoksa aktarmalı en kısa yol Dijkstra ile bulunur
+ * Böylece "en yakın boşta araç" seçimi, yalnızca elle girilmiş mesafelere değil,
+ * rota planlarından öğrenilen mesafelere de dayanır. Hiç veri yoksa null döner.
+ */
+export function enKisaKm(
+  distances: Distance[],
+  routes: RoutePlan[],
+  aId?: string | null,
+  bId?: string | null,
+): number | null {
+  if (!aId || !bId) return null;
+  if (aId === bId) return 0;
+  type Kenar = { to: string; m: number };
+  const graf = new Map<string, Kenar[]>();
+  const kenarEkle = (x?: string | null, y?: string | null, m?: number | null) => {
+    if (!x || !y || m == null || !Number.isFinite(m) || m < 0) return;
+    if (!graf.has(x)) graf.set(x, []);
+    if (!graf.has(y)) graf.set(y, []);
+    graf.get(x)!.push({ to: y, m });
+    graf.get(y)!.push({ to: x, m });
+  };
+  for (const d of distances || []) kenarEkle(d.fromId, d.toId, d.meters != null ? Number(d.meters) : null);
+  for (const r of routes || []) {
+    const stops = (r.stops || []) as RoutePlan['stops'];
+    for (let i = 1; i < stops.length; i++) {
+      const onceki = stops[i - 1], suanki = stops[i];
+      kenarEkle(onceki?.stationId, suanki?.stationId, suanki?.leg?.meters != null ? Number(suanki.leg.meters) : null);
+    }
+  }
+  if (!graf.has(aId) || !graf.has(bId)) return distanceBetween(distances, aId, bId);
+  const mesafe = new Map<string, number>([[aId, 0]]);
+  const kuyruk: { id: string; m: number }[] = [{ id: aId, m: 0 }];
+  while (kuyruk.length) {
+    kuyruk.sort((x, y) => x.m - y.m);
+    const cur = kuyruk.shift()!;
+    if (cur.m > (mesafe.get(cur.id) ?? Infinity)) continue;
+    if (cur.id === bId) return cur.m;
+    for (const e of graf.get(cur.id) || []) {
+      const nm = cur.m + e.m;
+      if (nm < (mesafe.get(e.to) ?? Infinity)) {
+        mesafe.set(e.to, nm);
+        kuyruk.push({ id: e.to, m: nm });
+      }
+    }
+  }
+  return mesafe.get(bId) ?? distanceBetween(distances, aId, bId);
 }
 
 export async function saveDistance(aId: string, bId: string, meters: number | null): Promise<void> {
