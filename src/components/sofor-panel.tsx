@@ -87,6 +87,20 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
   const aktifPlan = (routes || []).find(
     (r) => r.vehicleId === vehicleId && r.status !== 'TAMAMLANDI' && !!r.date && r.date <= today(),
   ) || null;
+  // Planın güzergâhı: başlangıç istasyonu + durak zinciri (ardışık tekrarlar atılır).
+  // Plan, araca sabit hat atanmamışsa da şoförün işidir — panelde gösterilir ve tur başlatılabilir.
+  const planDurakIds = aktifPlan
+    ? [aktifPlan.startStationId, ...(aktifPlan.stops || []).map((s) => s.stationId)]
+        .filter((id): id is string => !!id)
+        .filter((id, i, arr) => i === 0 || id !== arr[i - 1])
+    : [];
+  const planFrom = aktifPlan ? planDurakIds[0] || null : null;
+  const planTo = aktifPlan ? planDurakIds[planDurakIds.length - 1] || null : null;
+  // Tur başlatma çifti: önce aracın sabit hattı, yoksa bugünün rota planı.
+  const turFrom = vehicle?.sabitFromId || planFrom || null;
+  const turTo = vehicle?.sabitToId || planTo || null;
+  const turKaynak: 'sabit' | 'plan' | null =
+    vehicle?.sabitFromId && vehicle?.sabitToId ? 'sabit' : turFrom && turTo ? 'plan' : null;
 
   /* ---- Yeni görev bildirimi: yanıp sönen kart + zil sesi + titreşim ---- */
   const yeniGorevler = open.filter((g) => g.durum === 'YENI' && !!g.id && !sessiz.includes(g.id));
@@ -171,14 +185,16 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
     finally { setBusy(null); }
   }
 
-  async function turBaslat(dolu: boolean) {
-    if (!vehicle?.sabitFromId || !vehicle?.sabitToId) return;
+  async function turBaslat(dolu: boolean, fromId?: string | null, toId?: string | null) {
+    const f = fromId || vehicle?.sabitFromId || null;
+    const t = toId || vehicle?.sabitToId || null;
+    if (!vehicle || !f || !t) return;
     setBusy('yeni');
     try {
       await createGorev({
         vehicleId: vehicle.id, tip: 'HAT',
-        fromId: vehicle.sabitFromId, toId: vehicle.sabitToId,
-        dolu, km: hatKm, soforUid: user.uid, soforAd: user.displayName,
+        fromId: f, toId: t,
+        dolu, km: distanceBetween((distances || []) as Distance[], f, t), soforUid: user.uid, soforAd: user.displayName,
       });
       toast(dolu ? 'Dolu tur açıldı — yola çıkınca "Dolu yola çıktım" pinini atın' : 'Boş tur açıldı');
     } catch (e) { toast(fbErr(e), 'error'); }
@@ -253,9 +269,21 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
                   <div style={{ fontSize: 11, opacity: .85, marginTop: 4 }}>Tek yön: {fmtKm(hatKm)}</div>
                 )}
               </>
+            ) : aktifPlan && planFrom && planTo ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, fontSize: 13, fontWeight: 700 }}>
+                  <Icon name="mappin" size={14} />
+                  <span>{stName(planFrom)}</span>
+                  <Icon name="arrowRight" size={14} />
+                  <span>{stName(planTo)}</span>
+                </div>
+                <div style={{ fontSize: 11, opacity: .85, marginTop: 4 }}>
+                  Bugünün rota planı {aktifPlan.no || ''}{aktifPlan.start ? ` · Çıkış ${aktifPlan.start}` : ''}
+                </div>
+              </>
             ) : (
               <div style={{ fontSize: 11.5, opacity: .85, marginTop: 5 }}>
-                Sabit hat tanımlı değil — yöneticiniz araca sabit hat atamalı.
+                Sabit hat tanımlı değil — yöneticiniz araca sabit hat atamalı veya bugün için rota planı oluşturmalı.
               </div>
             )}
           </div>
@@ -297,7 +325,9 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
           </Note>
         ) : open.length === 0 ? (
           <div className="card"><div className="card-body" style={{ fontSize: 13, color: 'var(--muted)' }}>
-            Şu an açık göreviniz yok. Aşağıdan sabit hat turu başlatabilirsiniz; istasyon çağrısı geldiğinde burada belirecek.
+            {aktifPlan
+              ? <>Bugünün rota planı <b>{aktifPlan.no || ''}</b> sürüyor. Aşağıdan plan turunu başlatabilirsiniz; istasyon çağrısı geldiğinde burada belirecek.</>
+              : <>Şu an açık göreviniz yok. Aşağıdan sabit hat turu başlatabilirsiniz; istasyon çağrısı geldiğinde burada belirecek.</>}
           </div></div>
         ) : (
           open.map((g) => (
@@ -307,21 +337,26 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
           ))
         )}
 
-        {/* Sabit hat turu başlat */}
-        {vehicle && sabitHatVar && !hatAcik && (
+        {/* Tur başlat — sabit hattan veya bugünün rota planından */}
+        {vehicle && turKaynak && !hatAcik && (
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: .4, color: '#5d6f84', textTransform: 'uppercase', margin: '0 0 8px' }}>
-              Yeni sabit hat turu
+              Yeni tur başlat {turKaynak === 'plan' ? '— bugünün planından' : ''}
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               <button className="btn" style={{ padding: '15px 14px', fontSize: 15, fontWeight: 800, borderRadius: 12, whiteSpace: 'normal', textAlign: 'center' }}
-                disabled={busy === 'yeni'} onClick={() => turBaslat(true)}>
-                Dolu tur başlat — {stName(vehicle.sabitFromId)} → {stName(vehicle.sabitToId)}
+                disabled={busy === 'yeni'} onClick={() => turBaslat(true, turFrom, turTo)}>
+                Dolu tur başlat — {stName(turFrom)} → {stName(turTo)}
               </button>
               <button className="btn secondary" style={{ padding: '15px 14px', fontSize: 14, fontWeight: 700, borderRadius: 12, whiteSpace: 'normal', textAlign: 'center' }}
-                disabled={busy === 'yeni'} onClick={() => turBaslat(false)}>
+                disabled={busy === 'yeni'} onClick={() => turBaslat(false, turFrom, turTo)}>
                 Boş tur başlat (yüksüz hareket)
               </button>
+              {turKaynak === 'plan' && (
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  Aracınıza sabit hat atanmamış; tur bugünün rota planı güzergâhından açılır.
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -338,6 +373,11 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
               {aktifPlan ? (
                 <div style={{ fontSize: 12.5, background: '#eff6ff', color: '#1d4ed8', borderRadius: 9, padding: '8px 10px', fontWeight: 600 }}>
                   <b>Rota planı {aktifPlan.no || ''} sürüyor.</b> İşin bitince rotadaki sıradaki durakla devam edin.
+                  {planDurakIds.length > 0 && (
+                    <div style={{ marginTop: 4, fontWeight: 800, fontSize: 12 }}>
+                      {aktifPlan.start ? `Çıkış ${aktifPlan.start} · ` : ''}{planDurakIds.map((id) => stName(id)).join(' → ')}
+                    </div>
+                  )}
                 </div>
               ) : (
                 acikBekleme ? (
@@ -351,7 +391,7 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
                 ) : (
                   !beklemeForm ? (
                     <button className="btn secondary" style={{ padding: '11px 12px', fontWeight: 700, borderRadius: 10 }}
-                      disabled={busy === 'vardiya'} onClick={() => { setBeklemeForm(true); setBeklemeIst(vehicle?.sabitFromId || ''); }}>
+                      disabled={busy === 'vardiya'} onClick={() => { setBeklemeForm(true); setBeklemeIst(vehicle?.sabitFromId || planFrom || ''); }}>
                       Beklemedeyim — istasyon pinle
                     </button>
                   ) : (
