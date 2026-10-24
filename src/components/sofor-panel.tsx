@@ -171,16 +171,19 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
     finally { setBusy(null); }
   }
 
-  /** Talep seferi tamamlandı: son seferse görev + talep otomatik kapanır, araç bu istasyonda boşta kalır. */
+  /** Talep/çağrı seferi tamamlandı: son seferse görev (+talep) otomatik kapanır, araç bu istasyonda boşta kalır.
+   *  Mesaj BACKEND KARARINDAN yazılır — panelin buton etiketi onSnapshot geciktiğinde bayat kalabilir;
+   *  kararı veri kaynağındaki taze veri verir (bkz. db.seferTamamla). */
   async function seferBitir(g: Gorev) {
     setBusy(g.id || 'x');
     try {
-      const son = seferSonMu(g);
-      const toplam = seferToplam(g);
-      await seferTamamla(g, user.displayName);
-      toast(son
-        ? 'Son sefer tamamlandı — görev ve talep otomatik kapandı. Araç bu istasyonda boşta.'
-        : `Sefer ${seferBiten(g) + 1}/${toplam} tamamlandı — boş dönüşte sıradaki sefere hazırlanın.`);
+      const r = await seferTamamla(g, user.displayName);
+      if (r.zatenKapandi) toast('Bu görev çoktan kapandı — panel güncellenecek.');
+      else if (r.sonSefer)
+        toast(gorevTalepMi(g)
+          ? 'Son sefer tamamlandı — görev ve talep otomatik kapandı. Araç bu istasyonda boş bekliyor.'
+          : 'Son sefer tamamlandı — görev kapandı. Araç bu istasyonda boş bekliyor.');
+      else toast(`Sefer ${r.biten}/${r.toplam} tamamlandı — boş dönüşte sıradaki sefere hazırlanın.`);
     } catch (e) { toast(fbErr(e), 'error'); }
     finally { setBusy(null); }
   }

@@ -21,7 +21,7 @@ import type {
   ColName, DemoDB, Distance, Gorev, GorevDurum, GorevPin, GorevTip, GunlukKaydi, MolaTip, PinTip, Role,
   RoutePlan, RouteTotals, Shipment, Station, TransportRequest, UserProfile, Vehicle,
 } from './types';
-import { gorevSonIst, seferToplam } from './types';
+import { gorevSonIst, seferBiten, seferToplam } from './types';
 
 export const COLS: ColName[] = ['users', 'stations', 'distances', 'vehicles', 'requests', 'routes', 'shipments', 'gorevler'];
 const DEMO_KEY = 'yatsan_il_db_v1';
@@ -176,41 +176,90 @@ async function bosBeklemePiniBas(vehicleId: string | null | undefined, istId: st
   try { await beklemeyeGec(vehicleId, istId, false); } catch { /* pini atılamazsa görev akışı bozulmasın */ }
 }
 
-/** Şoför (veya admin) pin basar: durum güncellenir + pin geçmişe eklenir. */
+/** Görevi veri kaynağından TAZE okur. Panel/takip ekranındaki kopya onSnapshot geciktiğinde
+ *  BAYATTIR; sefer sayımı ve durum kararları bu taze veriyle yapılmalı (bkz. seferTamamla). */
+async function gorevGetir(id: string | null | undefined): Promise<Gorev | null> {
+  if (!id) return null;
+  try {
+    if (mode === 'demo') return demoRows('gorevler').find((g) => g.id === id) || null;
+    const snap = await getDoc(doc(fb!.db, 'gorevler', id));
+    return snap.exists() ? (normalizeDates({ id: snap.id, ...snap.data() }) as Gorev) : null;
+  } catch { return null; }
+}
+
+/** Şoför (veya admin) pin basar: durum güncellenir + pin geçmişe eklenir.
+ *  ⚠️ Karar TAZE veriyle verilir, yazım TAZE pin dizisi üzerine yapılır:
+ *  panel kopyası bayatken (a) önceki hızlı pinler siliniyordu, (b) KAPANMIŞ görev eski
+ *  durumuna geri yazılabiliyordu — "2. indirmede görev bitmedi, tura devam etti" olayının
+ *  katkıcılarından biri buydu. Kapanmış göreve gelen bayat basış artık reddedilir. */
 export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum, byAd?: string): Promise<void> {
   if (!gorev.id) throw new Error('Görev kimliği yok.');
+  const taze = (await gorevGetir(gorev.id)) || gorev;
+  if (taze.durum === 'TAMAMLANDI' || taze.durum === 'IPTAL') {
+    // Görev zaten kapandı — bayat tıklama onu yeniden AÇAMAZ.
+    if (yeniDurum === 'TAMAMLANDI' || yeniDurum === 'IPTAL') {
+      // Kapatma tekrarı: sessizce yoksay; otomatik bekleme pininin garanti olsun.
+      if (taze.durum === 'TAMAMLANDI') await bosBeklemePiniBas(taze.vehicleId, gorevSonIst(taze));
+      return;
+    }
+    throw new Error('Bu görev zaten kapandı — panel birkaç saniye içinde güncellenecek.');
+  }
   const now = new Date().toISOString();
-  const pins: GorevPin[] = [...(gorev.pins || []), { tip, at: now, by: byAd || gorev.soforAd || 'Sistem' }];
+  const pins: GorevPin[] = [...(taze.pins || []), { tip, at: now, by: byAd || taze.soforAd || 'Sistem' }];
   await update('gorevler', gorev.id, { durum: yeniDurum, pins, updatedAt: now });
   // Kaynak talebi senkronla: görev TAMAMLANDI olunca talep de TAMAMLANDI olur,
   // görev İPTAL olunca talep yeniden atanabilir (ONAYLANDI) duruma döner.
-  if (gorev.requestId && yeniDurum === 'TAMAMLANDI') {
-    try { await update('requests', gorev.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
+  if (taze.requestId && yeniDurum === 'TAMAMLANDI') {
+    try { await update('requests', taze.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
   }
-  if (gorev.requestId && yeniDurum === 'IPTAL') {
-    try { await update('requests', gorev.requestId, { status: 'ONAYLANDI' }); } catch { /* yoksay */ }
+  if (taze.requestId && yeniDurum === 'IPTAL') {
+    try { await update('requests', taze.requestId, { status: 'ONAYLANDI' }); } catch { /* yoksay */ }
   }
   // Görev kapandı: araç son kaldığı istasyonda boş bekliyor — otomatik bekleme pini.
   if (yeniDurum === 'TAMAMLANDI') {
-    await bosBeklemePiniBas(gorev.vehicleId, gorevSonIst(gorev));
+    await bosBeklemePiniBas(taze.vehicleId, gorevSonIst({ ...taze, pins }));
   }
 }
 
+/** seferTamamla sonucu — panel, mesajı BU karara göre yazar (bayat buton etiketine değil). */
+export interface SeferSonuc {
+  biten: number;
+  toplam: number;
+  sonSefer: boolean;
+  /** Görev çağrı anında zaten kapalıydı — hiçbir şey yazılmadı */
+  zatenKapandi: boolean;
+}
+
 /**
- * Talep seferi tamamlandı: bitenSefer artar.
+ * Talep/çağrı seferi tamamlandı: bitenSefer artar.
  *   • Son seferse görev TAMAMLANDI olur → araç o istasyonda (toId) boşta kalır,
  *     kaynak talep de otomatik TAMAMLANDI'ya geçer.
  *   • Ara seferse görev DONUS_YOLDA'ya döner (boş dönüş → yeniden yükleme → sıradaki sefer).
+ *
+ * ⚠️ KARAR TAZE VERİYLE VERİLİR — "2 turluk işin 2. indirmesinde görev bitmedi, tura devam
+ * etti" olayının kök nedeni: paneldeki görev kopyası onSnapshot geciktiğinde BAYATTI ve
+ * bitenSefer eski değeriyle hesaplanıyordu (biten=1/2 → dönüş). Artık:
+ *   1. Görev Firestore'dan taze okunur,
+ *   2. tamamlanan sefer = max(taze bitenSefer, pinler — her tamamlanan sefer DONUS_CIKTIM/TAMAM bırakır),
+ *   3. görev zaten kapalıysa yazım yok (çift tık/bayat basış idempotent karşılanır).
  */
-export async function seferTamamla(gorev: Gorev, byAd?: string): Promise<void> {
+export async function seferTamamla(gorev: Gorev, byAd?: string): Promise<SeferSonuc> {
   if (!gorev.id) throw new Error('Görev kimliği yok.');
-  const now = new Date().toISOString();
-  const biten = Math.round(Number(gorev.bitenSefer) || 0) + 1;
-  const toplam = seferToplam(gorev);
+  const taze = (await gorevGetir(gorev.id)) || gorev;
+  const toplam = seferToplam(taze);
+  if (taze.durum === 'TAMAMLANDI' || taze.durum === 'IPTAL') {
+    // Zaten kapalı: yazım yok; yalnız otomatik "boş bekliyorum" pinini garanti et.
+    if (taze.durum === 'TAMAMLANDI') await bosBeklemePiniBas(taze.vehicleId, gorevSonIst(taze));
+    return { biten: seferBiten(taze), toplam, sonSefer: true, zatenKapandi: true };
+  }
+  const pinleBiten = (taze.pins || []).filter((p) => p.tip === 'DONUS_CIKTIM' || p.tip === 'TAMAM').length;
+  const onceki = Math.max(Math.round(Number(taze.bitenSefer) || 0), pinleBiten);
+  const biten = onceki + 1;
   const sonSefer = biten >= toplam;
+  const now = new Date().toISOString();
   const pins: GorevPin[] = [
-    ...(gorev.pins || []),
-    { tip: sonSefer ? 'TAMAM' : 'DONUS_CIKTIM', at: now, by: byAd || gorev.soforAd || 'Sistem' },
+    ...(taze.pins || []),
+    { tip: sonSefer ? 'TAMAM' : 'DONUS_CIKTIM', at: now, by: byAd || taze.soforAd || 'Sistem' },
   ];
   await update('gorevler', gorev.id, {
     bitenSefer: biten,
@@ -218,13 +267,14 @@ export async function seferTamamla(gorev: Gorev, byAd?: string): Promise<void> {
     pins,
     updatedAt: now,
   });
-  if (sonSefer && gorev.requestId) {
-    try { await update('requests', gorev.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
+  if (sonSefer && taze.requestId) {
+    try { await update('requests', taze.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
   }
   // Son seferin indirmesiyle araç son boşalttığı istasyonda boş bekler — otomatik bekleme pini.
   if (sonSefer) {
-    await bosBeklemePiniBas(gorev.vehicleId, gorev.toId || gorevSonIst(gorev));
+    await bosBeklemePiniBas(taze.vehicleId, taze.toId || gorevSonIst({ ...taze, pins }));
   }
+  return { biten, toplam, sonSefer, zatenKapandi: false };
 }
 
 /**
