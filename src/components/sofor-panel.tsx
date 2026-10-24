@@ -551,23 +551,25 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
   const cagri = g.tip === 'CAGRI';
   const doluHat = g.tip === 'HAT' && !!g.dolu;
   const talep = gorevTalepMi(g); // talep seferi — sabit hat döngüsü DEĞİL
+  const cagriSefer = !talep && g.cagriSefer === true; // istasyon çağrısından açılan seferli görev
+  const seferli = talep || cagriSefer; // ikisi de aynı sefer akışını işletir
   const seferTop = seferToplam(g);
   const siradaki = Math.min(seferBiten(g) + 1, seferTop);
-  const sonSefer = talep && seferSonMu(g);
+  const sonSefer = seferli && seferSonMu(g);
   const btnStyle: React.CSSProperties = { padding: '14px 12px', fontSize: 14.5, fontWeight: 800, borderRadius: 12, whiteSpace: 'normal', textAlign: 'center' };
 
   // Duruma göre bir sonraki adım açıklaması
-  const adim = !cagri && (doluHat || talep) ? ({
-    YENI: talep
+  const adim = !cagri && (doluHat || seferli) ? ({
+    YENI: seferli
       ? `Sefer ${siradaki}/${seferTop} — ${stName(g.fromId)}'de yükleyin, yola çıkınca pini atın`
       : 'Yükleme bitince "Dolu yola çıktım" pinini atın',
     YOLDA: 'Yola çıktınız — varınca pin atın',
-    BEKLIYOR: talep
+    BEKLIYOR: seferli
       ? (sonSefer
         ? 'İndirme bitince pini atın — görev kapanır, araç bu istasyonda boşta kalır'
         : `İndirme bitince pini atın — ${siradaki}/${seferTop} sefer biter, boş dönüşe geçilir`)
       : 'İndirme bitince dönüş pinini atın',
-    DONUS_YOLDA: talep
+    DONUS_YOLDA: seferli
       ? `${stName(g.fromId)} için boş dönüştesiniz — sıradaki seferin yüklemesi orada`
       : `Boş dönüştesiniz — ${stName(g.fromId)} için yolda`,
     ISTASYONDA: talep
@@ -588,10 +590,10 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span className="badge type-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
             <Icon name={cagri ? 'alert' : 'route'} size={12} />
-            {talep ? 'Talep seferi' : (GOREV_TIP[g.tip] || g.tip)}
+            {talep ? 'Talep seferi' : cagriSefer ? 'Çağrı seferi' : (GOREV_TIP[g.tip] || g.tip)}
           </span>
           <div style={{ display: 'flex', gap: 6 }}>
-            {talep && (
+            {seferli && (
               <span className="badge" style={{ background: '#e0f2fe', color: '#075985', fontWeight: 800, fontSize: 11 }}>
                 Sefer {siradaki}/{seferTop}
               </span>
@@ -663,7 +665,7 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
             </button>
           ))}
           {g.durum === 'BEKLIYOR' && (doluHat ? (
-            talep ? (
+            seferli ? (
               <button className="btn" style={btnStyle} disabled={busy} onClick={() => onSefer(g)}>
                 <Icon name={sonSefer ? 'check' : 'route'} size={17} />
                 {sonSefer
@@ -686,7 +688,7 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
             </button>
           )}
           {g.durum === 'ISTASYONDA' && (doluHat ? (
-            talep ? (
+            seferli ? (
               <>
                 <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'DOLU_CIKTIM', 'YOLDA')}>
                   <Icon name="truck" size={17} /> Yükleme tamam — Dolu yola çıktım ({siradaki}/{seferTop} sefer)

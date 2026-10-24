@@ -125,6 +125,8 @@ export interface Gorev {
   seferSayisi?: number | null;
   /** Tamamlanan sefer sayısı (ara seferler boş dönüşle tamamlanır) */
   bitenSefer?: number | null;
+  /** İstasyon çağrısından açılan seferli görev (talep değildir; çağıran istasyon = yükleme noktası) */
+  cagriSefer?: boolean | null;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -6,7 +6,7 @@
 //   • İstasyon ihtiyacında görev, çağıran istasyona EN YAKIN boşta araca otomatik düşer (veya yönetici elle atar)
 // ============================================================
 import { useMemo, useState } from 'react';
-import { createGorev, enKisaKm, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, paydosAktif, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
+import { createGorev, enKisaKm, enUygunBosArac, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, paydosAktif, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_DURUM, MOLA_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
 import { gorevTalepMi, seferBiten, seferToplam } from '@/lib/types';
@@ -89,15 +89,19 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
     .slice(0, 15);
 
-  async function cagriYap(stationId: string, vehicleId: string | null) {
+  async function cagriYap(stationId: string, vehicleId: string | null, hedefId: string | null, tur: number) {
     if (!stationId) { toast('Çağıran istasyonu seçin.', 'error'); return; }
+    if (tur > 0 && !hedefId) { toast('Sefer hedefi seçin ya da "Sadece çağır"ı seçin.', 'error'); return; }
+    if (tur > 0 && hedefId === stationId) { toast('Sefer hedefi çağıran istasyondan farklı olmalı.', 'error'); return; }
     setBusy(true);
     try {
-      const r = await istasyondanAracCagir(stationId, vehicleId, ctx.user.displayName);
+      const r = await istasyondanAracCagir(stationId, vehicleId, ctx.user.displayName, hedefId, tur);
       if (r === 'BOS_YOK') toast('Boşta araç yok — bir görev bitince tekrar deneyin.', 'error');
       else {
         const v = vehicles?.find((x) => x.id === r.vehicleId);
-        toast(`Görev düşürüldü → ${v?.code || 'araç'} (${stName(stationId)})`);
+        toast(tur > 0
+          ? `${v?.code || 'araç'} → ${stName(stationId)}'dan ${stName(hedefId)}'a ${tur} sefer — şoför panelinde uyarı görünecek`
+          : `Görev düşürüldü → ${v?.code || 'araç'} (${stName(stationId)})`);
         setCagriOpen(false);
       }
     } catch (e) { toast(fbErr(e), 'error'); }
@@ -127,6 +131,8 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
         <b> çağıran istasyona en yakın boşta araca</b> otomatik düşer; dilerseniz aracı elle de seçebilirsiniz.
         <b> Talep seferlerinde</b> (araç taleplerinden atanan işler) şoför belirlenen sayıda "yük al → götür → bırak"
         yapar: <b>son seferin indirmesiyle görev ve talep otomatik Tamamlandı</b> olur, araç teslim istasyonunda boşta kalır.
+        <b> İstasyon çağrısında</b> tur sayısı verildiyse aynı akış <b>Çağrı seferi</b> olarak işler; son turun indirmesiyle
+        araç <b>son boşalttığı istasyonda otomatik "boş bekliyorum" pinini alır</b>.
         {bozukAracVar && <> <b style={{ color: '#b45309' }}>Dikkat:</b> kodu boş görünen araçlar eski bir yazım hatasından
         bozulmuştur — <b>Araçlar</b> sayfasından Düzenle ile bilgilerini yeniden girin (aynı kayıt onarılır, geçmiş bağlantıları korunur).</>}
       </Note>
@@ -190,8 +196,8 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                     <div style={{ marginTop: 10, background: 'var(--bg-soft, #f6f8fb)', borderRadius: 10, padding: '9px 11px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, marginBottom: 5 }}>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <GorevTipBadge t={g.tip} talep={gorevTalepMi(g)} />
-                          {gorevTalepMi(g) && (
+                          <GorevTipBadge t={g.tip} talep={gorevTalepMi(g)} cagriSefer={g.cagriSefer === true} />
+                          {(gorevTalepMi(g) || g.cagriSefer === true) && (
                             <span className="badge" style={{ background: '#e0f2fe', color: '#075985', fontWeight: 800, fontSize: 11 }}>
                               Sefer {Math.min(seferBiten(g) + 1, seferToplam(g))}/{seferToplam(g)}
                             </span>
@@ -269,7 +275,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
                     <tr key={g.id}>
                       <td><b>{v?.code || '—'}</b></td>
                       <td>{g.tip === 'CAGRI' ? `${stName(g.toId)} çağrısı` : `${stName(g.fromId)} → ${stName(g.toId)}`}</td>
-                      <td><GorevTipBadge t={g.tip} talep={gorevTalepMi(g)} /></td>
+                      <td><GorevTipBadge t={g.tip} talep={gorevTalepMi(g)} cagriSefer={g.cagriSefer === true} /></td>
                       <td><GorevDurumBadge s={g.durum} /></td>
                       <td style={{ fontSize: 12 }}>{lastPin ? PIN_LABEL[lastPin.tip] || lastPin.tip : '—'}</td>
                       <td style={{ color: 'var(--muted)' }}>{lastPin ? fmtDT(lastPin.at) : '—'}</td>
@@ -317,21 +323,40 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, routes, 
   distances: Distance[];
   routes: RoutePlan[];
   busy: boolean;
-  onSubmit: (stationId: string, vehicleId: string | null) => void;
+  onSubmit: (stationId: string, vehicleId: string | null, hedefId: string | null, tur: number) => void;
 }) {
   const [stationId, setStationId] = useState('');
+  const [hedefId, setHedefId] = useState('');
+  const [tur, setTur] = useState(1);
   const [vehicleId, setVehicleId] = useState(''); // '' = en yakın boşta araç
   const aktif = vehicles.filter((v) => v.status === 'AKTIF');
   const stAd = (id?: string | null) => {
     const s = stations.find((x) => x.id === id);
     return s ? `${s.code} · ${s.name}` : 'bilinmiyor';
   };
+  // Otomatik seçim önizlemesi: db.ts'teki gerçek atama fonksiyonuyla birebir aynı hesap.
+  const autoPick = enUygunBosArac(aktif, gorevler, distances, routes, stationId || undefined);
+  // Liste sırası = seçim önceliği: boşta önce → km artan → km bilinmeyen → meşgul.
+  const liste = [...aktif].sort((a, b) => {
+    const ba = isBosArac(a.id, gorevler) ? 0 : 1;
+    const bb = isBosArac(b.id, gorevler) ? 0 : 1;
+    if (ba !== bb) return ba - bb;
+    const ka = enKisaKm(distances, routes, aracinStasyonu(a, gorevler), stationId);
+    const kb = enKisaKm(distances, routes, aracinStasyonu(b, gorevler), stationId);
+    if (ka != null && kb != null && ka !== kb) return ka - kb;
+    if (ka == null && kb != null) return 1;
+    if (ka != null && kb == null) return -1;
+    return (a.code || '').localeCompare(b.code || '', 'tr');
+  });
+  const turModu = tur > 0;
+  const hedefHata = turModu && !!hedefId && hedefId === stationId;
   return (
     <Modal title="İstasyondan Araç Çağır" onClose={onClose}
       footer={
         <>
           <button className="btn secondary" onClick={onClose}>Vazgeç</button>
-          <button className="btn" disabled={busy} onClick={() => onSubmit(stationId, vehicleId || null)}>
+          <button className="btn" disabled={busy || (turModu && (!hedefId || hedefHata))}
+            onClick={() => onSubmit(stationId, vehicleId || null, turModu ? hedefId : null, tur)}>
             Çağrı Yap
           </button>
         </>
@@ -340,26 +365,61 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, routes, 
       <Note type="info">
         Görev varsayılan olarak <b>çağıran istasyona en yakın boşta araca</b> otomatik düşer;
         yönetici istersen aşağıdan aracı <b>elle seçebilir</b> (meşgul araç da seçilebilir).
+        <b> Tur sayısı 1 veya üstü</b> seçilirse çağrı seferli işe dönüşür: araç çağıran istasyondan
+        yük alıp hedefe gider; <b>son turun indirmesiyle görev biter ve araç son boşalttığı istasyonda
+        otomatik "boş bekliyorum" pinini alır</b>.
       </Note>
       <div className="field" style={{ marginTop: 10 }}>
-        <label>Çağıran İstasyon <span className="req">*</span></label>
+        <label>Çağıran İstasyon (yükleme noktası) <span className="req">*</span></label>
         <select value={stationId} onChange={(e) => setStationId(e.target.value)}>
           {renderOpts(stations.map((s) => ({ v: s.id, t: `${s.code} · ${s.name}` })), stationId, '— İstasyon seçin —')}
         </select>
       </div>
       <div className="field">
+        <label>Sefer hedefi (boşaltma istasyonu) {turModu && <span className="req">*</span>}</label>
+        <select value={hedefId} onChange={(e) => setHedefId(e.target.value)} disabled={!turModu}>
+          {renderOpts(stations
+            .filter((s) => !stationId || s.id !== stationId)
+            .map((s) => ({ v: s.id, t: `${s.code} · ${s.name}` })), hedefId, turModu ? '— Hedef istasyon seçin —' : 'Tur yok — hedef gerekmez')}
+        </select>
+        {hedefHata && <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 4, fontWeight: 600 }}>Hedef, çağıran istasyonla aynı olamaz.</div>}
+      </div>
+      <div className="field">
+        <label>Kaç tur yapacak? <span className="req">*</span></label>
+        <select value={tur} onChange={(e) => setTur(Number(e.target.value))}>
+          <option value={0}>Sadece çağır — araç yalnız gelsin (tur yok)</option>
+          {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => (
+            <option key={n} value={n}>{n} tur{n === 1 ? ' (tek gidiş — varsayılan)' : ''}</option>
+          ))}
+        </select>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>
+          1 tur = araç çağıran istasyondan bir kez yük alır ve hedefe teslim eder; ara turlarda boş dönüp
+          yeniden yükler.
+        </div>
+      </div>
+      <div className="field">
         <label>Araç</label>
         <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
-          <option value="">En yakın boşta araç (otomatik)</option>
-          {aktif.map((v) => {
+          <option value="">
+            {autoPick
+              ? `En yakın boşta araç (otomatik) → seçilecek: ${autoPick.code}`
+              : 'Boşta araç yok — elle seçin veya görev bitişini bekleyin'}
+          </option>
+          {liste.map((v) => {
             const bos = isBosArac(v.id, gorevler);
             const konum = aracinStasyonu(v, gorevler);
             const km = stationId ? enKisaKm(distances, routes, konum, stationId) : null;
             return <option key={v.id} value={v.id}>
-              {v.code}{v.name ? ` · ${v.name}` : ''} — {stAd(konum)}{km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
+              {v.code}{v.name ? ` · ${v.name}` : ''} — {konum ? stAd(konum) : 'konum bilinmiyor'}
+              {km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
             </option>;
           })}
         </select>
+        {stationId && autoPick && (
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>
+            Otomatik seçim: <b>{autoPick.code}</b> — çağıran istasyona ({stAd(stationId)}) en yakın boşta araç.
+          </div>
+        )}
       </div>
     </Modal>
   );

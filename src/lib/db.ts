@@ -132,6 +132,8 @@ export async function createGorev(data: {
   talepNo?: string | null;
   malzeme?: string | null;
   miktar?: string | null;
+  /** İstasyon çağrısından açılan seferli görev işareti */
+  cagriSefer?: boolean | null;
   /** Talep seferi: yapılacak toplam sefer (varsayılan 1) */
   seferSayisi?: number | null;
 }): Promise<string> {
@@ -154,6 +156,7 @@ export async function createGorev(data: {
     talepNo: data.talepNo ?? null,
     malzeme: data.malzeme ?? null,
     miktar: data.miktar ?? null,
+    cagriSefer: data.cagriSefer ?? null,
     seferSayisi: seferToplam({ seferSayisi: data.seferSayisi }),
     bitenSefer: 0,
     durum: (data.initialDurum || 'YENI') as GorevDurum,
@@ -164,6 +167,13 @@ export async function createGorev(data: {
   // Yeni görev düşünce aracın "Beklemedeyim" kaydı otomatik kapanır (bekleme = görev gelene kadar).
   await acikBeklemeleriKapat(data.vehicleId);
   return add('gorevler', payload as unknown as Record<string, unknown>);
+}
+
+/** Görev kapandığında aracın otomatik "boş bekliyorum" pini: açık bekleme varsa kapatılır,
+ *  belirtilen istasyonda boş BEKLEME kaydı açılır (takipte "Beklemede — istasyon (boş)" görünür). */
+async function bosBeklemePiniBas(vehicleId: string | null | undefined, istId: string | null | undefined): Promise<void> {
+  if (!vehicleId || !istId) return;
+  try { await beklemeyeGec(vehicleId, istId, false); } catch { /* pini atılamazsa görev akışı bozulmasın */ }
 }
 
 /** Şoför (veya admin) pin basar: durum güncellenir + pin geçmişe eklenir. */
@@ -179,6 +189,10 @@ export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum,
   }
   if (gorev.requestId && yeniDurum === 'IPTAL') {
     try { await update('requests', gorev.requestId, { status: 'ONAYLANDI' }); } catch { /* yoksay */ }
+  }
+  // Görev kapandı: araç son kaldığı istasyonda boş bekliyor — otomatik bekleme pini.
+  if (yeniDurum === 'TAMAMLANDI') {
+    await bosBeklemePiniBas(gorev.vehicleId, gorevSonIst(gorev));
   }
 }
 
@@ -206,6 +220,10 @@ export async function seferTamamla(gorev: Gorev, byAd?: string): Promise<void> {
   });
   if (sonSefer && gorev.requestId) {
     try { await update('requests', gorev.requestId, { status: 'TAMAMLANDI' }); } catch { /* talep güncellenemese de görev akışı bozulmasın */ }
+  }
+  // Son seferin indirmesiyle araç son boşalttığı istasyonda boş bekler — otomatik bekleme pini.
+  if (sonSefer) {
+    await bosBeklemePiniBas(gorev.vehicleId, gorev.toId || gorevSonIst(gorev));
   }
 }
 
@@ -238,10 +256,25 @@ export function enUygunBosArac(
   })[0] || null;
 }
 
+/**
+ * İstasyon araç çağırır. Atama kuralı:
+ *   • vehicleIdOverride verilirse o araç atanır (yönetici manuel atama)
+ *   • verilmezse BOŞTA olan araçlar arasından çağıran istasyona EN YAKIN olanı otomatik düşer
+ *     (mesafe verisi yoksa araç koduna göre ilk boşta araç)
+ * Boşta araç yoksa 'BOS_YOK' döner.
+ *
+ * Tur modu (hedefIstId + turSayisi ≥ 1): çağrı seferli bir işe dönüşür — araç çağıran
+ * istasyona (YÜKLEME noktası) gider, oradan hedef istasyona turSayisi kadar
+ * "yük al → götür → bırak" yapar (talep seferi akışının aynısı); SON turun indirmesiyle
+ * görev TAMAMLANDI olur ve araç son boşalttığı istasyonda otomatik "boş bekliyorum" pinini alır.
+ * hedefIstId verilmezse eski davranış: yalnız konumlandırma çağrısı (CAGRI).
+ */
 export async function istasyondanAracCagir(
   toStationId: string,
   vehicleIdOverride?: string | null,
   byAd?: string,
+  hedefIstId?: string | null,
+  turSayisi?: number | null,
 ): Promise<{ vehicleId: string } | 'BOS_YOK'> {
   const [vehicles, gorevler, distances, routes] = await Promise.all([
     list('vehicles'), list('gorevler'), list('distances'), list('routes'),
@@ -252,6 +285,25 @@ export async function istasyondanAracCagir(
     : enUygunBosArac(uygun, gorevler as Gorev[], distances as Distance[], routes as RoutePlan[], toStationId);
   if (!secilen) return 'BOS_YOK';
   const sofor = await soforOfVehicle(secilen.id);
+  const turlar = Math.max(0, Math.round(Number(turSayisi) || 0));
+  if (hedefIstId && turlar >= 1 && hedefIstId !== toStationId) {
+    // TUR MODU: çağıran istasyon = yükleme, hedef = boşaltma; N seferlik TEK görev.
+    await createGorev({
+      vehicleId: secilen.id,
+      tip: 'HAT',
+      fromId: toStationId,
+      toId: hedefIstId,
+      dolu: true,
+      km: enKisaKm(distances as Distance[], routes as RoutePlan[], toStationId, hedefIstId),
+      soforUid: sofor?.uid || null,
+      soforAd: sofor?.displayName || null,
+      not: `İstasyon çağrısı — ${turlar} sefer${byAd ? ` (${byAd} çağırdı)` : ''}`,
+      cagriSefer: true,
+      seferSayisi: turlar,
+    });
+    return { vehicleId: secilen.id };
+  }
+  // KONUMLANDIRMA MODU: araç yalnız çağıran istasyona gönderilir (eski davranış).
   const cikisIst = aracinStasyonu(secilen, gorevler as Gorev[]);
   await createGorev({
     vehicleId: secilen.id,

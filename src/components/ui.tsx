@@ -103,10 +103,10 @@ export const GorevDurumBadge = ({ s }: { s: GorevDurum | string }) => {
   };
   return b(map[String(s)] || 'st-taslak', GOREV_DURUM[s as GorevDurum] || s);
 };
-export const GorevTipBadge = ({ t, talep }: { t: GorevTip | string; talep?: boolean }) =>
+export const GorevTipBadge = ({ t, talep, cagriSefer }: { t: GorevTip | string; talep?: boolean; cagriSefer?: boolean }) =>
   b(
     String(t) === 'CAGRI' ? 'pr-yuksek' : 'type-badge',
-    talep ? 'Talep seferi' : (GOREV_TIP[t as GorevTip] || t),
+    talep ? 'Talep seferi' : cagriSefer ? 'Çağrı seferi' : (GOREV_TIP[t as GorevTip] || t),
   );
 
 export const STOP_ACTION_LABEL = STOP_ACTIONS;
