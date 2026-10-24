@@ -2,7 +2,7 @@
 // Araç Talepleri — istasyonların araç hizmeti talepleri
 // Onaylı talep "Şoföre Ata" ile görevleştirilir: manuel araç seçimi veya en yakın boşta araç otomatik.
 import { useMemo, useState } from 'react';
-import { add, nextNo, remove, today, update, talebiGoreveDonustur, enKisaKm, aracinStasyonu, isBosArac } from '@/lib/db';
+import { add, nextNo, remove, today, update, talebiGoreveDonustur, enKisaKm, enUygunBosArac, aracinStasyonu, isBosArac } from '@/lib/db';
 import { PRIORITY, REQ_STATUS, fbErr } from '@/lib/constants';
 import { fmtDate, fmtKm, matchText, upperTr } from '@/lib/format';
 import { exportCSV } from '@/lib/csv';
@@ -221,6 +221,27 @@ function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, o
     return s ? `${s.code} · ${s.name}` : '—';
   };
   const aktif = vehicles.filter((v) => v.status === 'AKTIF');
+  // Otomatik seçim önizlemesi: db.ts'teki gerçek atama fonksiyonuyla BİREBİR aynı hesap —
+  // ekranda görünen araç, "Görevi Düşür" denince atanacak araçtır (sürpriz yok).
+  const autoPick = enUygunBosArac(aktif, gorevler, distances, routes, req.fromId);
+  // Boşta araçlarda konum/km biliniyor mu? (hiçbilinmiyorsa veri uyarısı gösterilir)
+  const kmBilenBosta = aktif.filter((v) => isBosArac(v.id, gorevler)).some((v) => {
+    const km = enKisaKm(distances, routes, aracinStasyonu(v, gorevler), req.fromId);
+    return km != null;
+  });
+  // Liste sırası = seçim önceliği: boşta olanlar önce, aralarında km bilinen yakınlar üstte,
+  // km bilinmeyenler sonra (kod sırası), meşguller en sona.
+  const liste = [...aktif].sort((a, b) => {
+    const ba = isBosArac(a.id, gorevler) ? 0 : 1;
+    const bb = isBosArac(b.id, gorevler) ? 0 : 1;
+    if (ba !== bb) return ba - bb;
+    const ka = enKisaKm(distances, routes, aracinStasyonu(a, gorevler), req.fromId);
+    const kb = enKisaKm(distances, routes, aracinStasyonu(b, gorevler), req.fromId);
+    if (ka != null && kb != null && ka !== kb) return ka - kb;
+    if (ka == null && kb != null) return 1;
+    if (ka != null && kb == null) return -1;
+    return (a.code || '').localeCompare(b.code || '', 'tr');
+  });
 
   async function save() {
     setBusy(true);
@@ -257,16 +278,34 @@ function TalepAtaModal({ req, stations, vehicles, gorevler, distances, routes, o
       <div className="field" style={{ marginTop: 12 }}>
         <label>Araç</label>
         <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
-          <option value="">En yakın boşta araç (otomatik)</option>
-          {aktif.map((v) => {
+          <option value="">
+            {autoPick
+              ? `En yakın boşta araç (otomatik) → seçilecek: ${autoPick.code}`
+              : 'Boşta araç yok — elle seçin veya görev bitişini bekleyin'}
+          </option>
+          {liste.map((v) => {
             const bos = isBosArac(v.id, gorevler);
             const konum = aracinStasyonu(v, gorevler);
             const km = enKisaKm(distances, routes, konum, req.fromId);
             return <option key={v.id} value={v.id}>
-              {v.code}{v.name ? ` · ${v.name}` : ''} — {stName(konum)}{km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
+              {v.code}{v.name ? ` · ${v.name}` : ''} — {konum ? stName(konum) : 'konum bilinmiyor'}
+              {km != null ? ` (${fmtKm(km)})` : ''}{bos ? ' — boşta' : ' — meşgul'}
             </option>;
           })}
         </select>
+        {!kmBilenBosta && (
+          <div style={{ fontSize: 11.5, color: '#854d0e', background: '#fef9c3', borderRadius: 8, padding: '7px 9px', marginTop: 6, fontWeight: 600 }}>
+            Dikkat: boşta araçların yük istasyonuna mesafesi hesaplanamıyor (konum veya mesafe verisi eksik).
+            Otomatik seçim bu durumda araç kodu sırasına düşer. <b>İstasyonlar &amp; Mesafeler</b> sayfasından
+            mesafeleri tanımlayın ve araçlara (Araçlar → Düzenle) sabit hat istasyonlarını girin.
+          </div>
+        )}
+        {autoPick && (
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>
+            Otomatik seçim: <b>{autoPick.code}</b> — yük istasyonuna ({stName(req.fromId)}) en yakın boşta araç
+            (konumu: son görevin bittiği istasyon, görev geçmişi yoksa sabit hattı).
+          </div>
+        )}
       </div>
       <div className="field">
         <label>Kaç sefer yapacak? <span className="req">*</span></label>

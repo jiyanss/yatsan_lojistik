@@ -216,8 +216,9 @@ export async function seferTamamla(gorev: Gorev, byAd?: string): Promise<void> {
  *     (mesafe verisi yoksa araç koduna göre ilk boşta araç)
  * Boşta araç yoksa 'BOS_YOK' döner.
  */
-/** Boşta araçlar arasından hedef istasyona en yakını seçer (mesafe verisi yoksa kod sırası). */
-function enUygunBosArac(
+/** Boşta araçlar arasından hedef istasyona en yakını seçer (mesafe verisi yoksa kod sırası).
+ *  Modal önizlemesi de aynı fonksiyonu kullanır — ekranda görünen seçimle gerçek atama birebir aynıdır. */
+export function enUygunBosArac(
   uygun: Vehicle[],
   gorevler: Gorev[],
   distances: Distance[],
