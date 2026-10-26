@@ -365,8 +365,10 @@ table.tbl tr.dim td { opacity: .55; }
 .tabs button:hover { color: var(--navy-700); }
 
 /* ---------- Modal ---------- */
+/* z-index 1000: Leaflet pane'leri (200–1000) hariç tüm sayfa katmanlarının üstünde.
+   Harita tarafında da takip-harita.tsx kök div'i izole edildiği için modal her koşulda üstte. */
 .modal-overlay {
-  position: fixed; inset: 0; z-index: 100;
+  position: fixed; inset: 0; z-index: 1000;
   background: rgba(8,20,36,.5); backdrop-filter: blur(2px);
   display: flex; align-items: flex-start; justify-content: center;
   padding: 6vh 16px 16px; overflow-y: auto;
@@ -393,7 +395,7 @@ table.tbl tr.dim td { opacity: .55; }
 @keyframes slideUp { from { transform: translateY(10px); opacity: .6; } to { transform: none; opacity: 1; } }
 
 /* ---------- Bildirim (toast) ---------- */
-.toast-root { position: fixed; top: 16px; right: 16px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.toast-root { position: fixed; top: 16px; right: 16px; z-index: 1100; /* modal'dan (1000) da üstte kalır */ display: flex; flex-direction: column; gap: 8px; }
 .toast {
   display: flex; align-items: flex-start; gap: 9px;
   background: var(--navy-900); color: #fff;

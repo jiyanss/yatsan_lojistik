@@ -370,7 +370,10 @@ export default function TakipHarita({ stations, vehicles, gorevler, routes, user
         .leaflet-popup-content-wrapper { border-radius: 12px; }
         .leaflet-popup-content { margin: 10px 13px; font-size: 12.5px; line-height: 1.5; }
       `}</style>
-      <div ref={divRef} style={{ width: '100%', height: '100%' }} />
+      {/* position+zIndex:0+isolation → kök stacking context'te yeni bir bağlam açar;
+          Leaflet pane'lerinin z-index'leri (tile 200, marker 600, popup 700, kontrol 1000)
+          bu bağlamın İÇİNDE kalır — aksi halde modal (z-100) ve topbar'ın üzerine çizer. */}
+      <div ref={divRef} style={{ width: '100%', height: '100%', position: 'relative', zIndex: 0, isolation: 'isolate' }} />
     </>
   );
 }
