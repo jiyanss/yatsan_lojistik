@@ -8,6 +8,8 @@
 //   • Aktif rota planları: durak zinciri kesikli çizgiyle çizilir
 //   • Popuplar: istasyona tıkla → oradaki araçlar + açık işler;
 //     araca tıkla → görev, şoför, son pin
+//   • Yönetici için kısayol: düzenleme modu kapalıyken istasyona tıklayınca
+//     "İstasyondan Araç Çağır" penceresi o istasyon seçili açılır (onIstTikla)
 //   Bu bileşen yalnızca tarayıcıda yüklenir (takip.tsx içinde next/dynamic ssr:false).
 // ============================================================
 import { useEffect, useMemo, useRef } from 'react';
@@ -66,7 +68,7 @@ interface AracKonum {
   g: Gorev | null;
 }
 
-export default function TakipHarita({ stations, vehicles, gorevler, routes, users, vardiyaYaz, editMode, pendingIstId, onPlace, onMoved }: {
+export default function TakipHarita({ stations, vehicles, gorevler, routes, users, vardiyaYaz, editMode, pendingIstId, onPlace, onMoved, onIstTikla }: {
   stations: Station[];
   vehicles: Vehicle[];
   gorevler: Gorev[];
@@ -79,6 +81,9 @@ export default function TakipHarita({ stations, vehicles, gorevler, routes, user
   pendingIstId: string | null;
   onPlace: (istId: string, lat: number, lng: number) => void;
   onMoved: (istId: string, lat: number, lng: number) => void;
+  /** İstasyona tıklandı (düzenleme modu kapalı) — araç çağırma penceresi bu istasyonla açılır.
+   *  Verilmezse (izleyici) tıklama eski davranış: yalnız bilgi popup. */
+  onIstTikla?: (istId: string) => void;
 }) {
   const divRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -87,8 +92,10 @@ export default function TakipHarita({ stations, vehicles, gorevler, routes, user
   const didFitRef = useRef(false);
   const onPlaceRef = useRef(onPlace);
   const onMovedRef = useRef(onMoved);
+  const onIstTiklaRef = useRef(onIstTikla);
   useEffect(() => { onPlaceRef.current = onPlace; }, [onPlace]);
   useEffect(() => { onMovedRef.current = onMoved; }, [onMoved]);
+  useEffect(() => { onIstTiklaRef.current = onIstTikla; }, [onIstTikla]);
 
   const stAdi = (id?: string | null) => {
     const s = stations.find((x) => x.id === id);
@@ -292,6 +299,15 @@ export default function TakipHarita({ stations, vehicles, gorevler, routes, user
         .addTo(lg);
       m.bindPopup(istPopupHtml(s), { maxWidth: 280 });
       m.bindTooltip(`${s.code} · ${s.name}`, { direction: 'bottom', offset: [0, 14], className: 'yts-lbl' });
+      // Yönetici kısayolu: tık → araç çağırma penceresi (düzenleme modunda istasyon yerleştirme/taşıma
+      // önceliklidir, popup kalır; izleyicide onIstTikla yok → popup eski davranış)
+      m.on('click', () => {
+        if (editMode) return;
+        const cb = onIstTiklaRef.current;
+        if (!cb) return;
+        map.closePopup();
+        cb(s.id);
+      });
       if (editMode) {
         m.on('dragstart', () => { draggingRef.current = true; });
         m.on('dragend', () => {

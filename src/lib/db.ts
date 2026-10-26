@@ -21,7 +21,7 @@ import type {
   ColName, DemoDB, Distance, Gorev, GorevDurum, GorevPin, GorevTip, GunlukKaydi, MolaTip, PinTip, Role,
   RoutePlan, RouteTotals, Shipment, Station, TransportRequest, UserProfile, Vehicle,
 } from './types';
-import { gorevSonIst, seferBiten, seferToplam } from './types';
+import { gorevSonIst, gorevTalepMi, seferBiten, seferToplam } from './types';
 
 export const COLS: ColName[] = ['users', 'stations', 'distances', 'vehicles', 'requests', 'routes', 'shipments', 'gorevler'];
 const DEMO_KEY = 'yatsan_il_db_v1';
@@ -203,6 +203,12 @@ export async function gorevPin(gorev: Gorev, tip: PinTip, yeniDurum: GorevDurum,
       return;
     }
     throw new Error('Bu görev zaten kapandı — panel birkaç saniye içinde güncellenecek.');
+  }
+  // Seferli görevde (talep/çağrı seferi) "Yer boş" kısayolu sefer sayacını ATLAR — araç
+  // dönüş-yükleme döngüsüne girip görev asla kapanmıyordu. İndirme yalnız "İndirme tamam"
+  // (seferTamamla) ile işaretlenir; bayat ekrandan gelen basış da burada dürüstçe yönlendirilir.
+  if ((gorevTalepMi(taze) || taze.cagriSefer === true) && tip === 'VARDIM_BOS') {
+    throw new Error('Seferli görevde varış "Vardım — Dolu" ile, indirme ise "İndirme tamam" ile işaretlenir.');
   }
   const now = new Date().toISOString();
   const pins: GorevPin[] = [...(taze.pins || []), { tip, at: now, by: byAd || taze.soforAd || 'Sistem' }];

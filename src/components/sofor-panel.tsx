@@ -700,9 +700,14 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
               <button className="btn" style={{ ...btnStyle, background: '#dc2626' }} disabled={busy} onClick={() => onPin(g, 'VARDIM_DOLU', 'BEKLIYOR')}>
                 <Icon name="clock" size={17} /> Vardım — Dolu, indirme bekliyorum
               </button>
-              <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'VARDIM_BOS', 'DONUS_YOLDA')}>
-                <Icon name="checkCircle" size={17} /> Vardım — Yer boş (dönüşe geç)
-              </button>
+              {/* Seferli görevde "Yer boş" KISAYOLU YOK: sefer sayacını atlayıp döngüye sokuyordu
+                  ("görevi bitirmedi, tura devam etti" olayının ikinci katkıcısı).
+                  İndirme yalnız VARDIM_DOLU → "İndirme tamam" (seferTamamla) ile işaretlenir. */}
+              {!seferli && (
+                <button className="btn" style={btnStyle} disabled={busy} onClick={() => onPin(g, 'VARDIM_BOS', 'DONUS_YOLDA')}>
+                  <Icon name="checkCircle" size={17} /> Vardım — Yer boş (dönüşe geç)
+                </button>
+              )}
             </>
           ) : (
             <button

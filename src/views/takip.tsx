@@ -48,6 +48,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   const [busy, setBusy] = useState(false);
   const [editMode, setEditMode] = useState(false); // haritada istasyon yerleştirme/taşıma
   const [pendingIst, setPendingIst] = useState<string | null>(null); // haritaya tıklanacak istasyon
+  const [cagriOnIst, setCagriOnIst] = useState<string | null>(null); // haritadan tıklanan istasyon — çağrı modalı önceden seçili açılır
 
   const vehicles = (data?.vehicles || null) as Vehicle[] | null;
   const gorevler = (data?.gorevler || []) as Gorev[];
@@ -162,6 +163,13 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
     catch (e) { toast(fbErr(e), 'error'); }
   }
 
+  /** Haritada istasyona tıklandı — "İstasyondan Araç Çağır" o istasyon seçili açılır
+   *  (yalnız düzenleme yetkisi olana bağlanır; izleyicide marker tıklaması eski popup davranışı). */
+  function istasyondanCagriAc(istId: string) {
+    setCagriOnIst(istId);
+    setCagriOpen(true);
+  }
+
   return (
     <>
       <Note type="info">
@@ -253,10 +261,12 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
               pendingIstId={pendingIst}
               onPlace={istasyonYerlestir}
               onMoved={istasyonTasi}
+              onIstTikla={ctx.canEdit ? istasyondanCagriAc : undefined}
             />
           </div>
           <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 6 }}>
             Araç konumları şoför pinlerinden türetilir (GPS yok) — yoldaki araç iki istasyon arası tahmini orta noktada gösterilir.
+            {!editMode && ctx.canEdit && ' Haritada bir istasyona tıklayın — araç çağrısı o istasyon seçili açılır.'}
             {editMode && ' Yerleştirme sonrası istasyonları sürükleyip bırakarak taşıyabilirsiniz.'}
           </div>
         </div>
@@ -271,7 +281,7 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
         </div>
         <span className="spacer" />
         {ctx.canEdit && (
-          <button className="btn" onClick={() => setCagriOpen(true)}>
+          <button className="btn" onClick={() => { setCagriOnIst(null); setCagriOpen(true); }}>
             <Icon name="mappin" size={15} /> İstasyondan Araç Çağır
           </button>
         )}
@@ -415,7 +425,8 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
 
       {cagriOpen && (
         <CagriModal
-          onClose={() => setCagriOpen(false)}
+          onClose={() => { setCagriOpen(false); setCagriOnIst(null); }}
+          baslangicIstId={cagriOnIst || undefined}
           stations={stations}
           vehicles={sorted}
           gorevler={gorevler}
@@ -440,8 +451,10 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
 }
 
 /* ---------------- İstasyondan araç çağırma ---------------- */
-function CagriModal({ onClose, stations, vehicles, gorevler, distances, routes, busy, onSubmit }: {
+function CagriModal({ onClose, baslangicIstId, stations, vehicles, gorevler, distances, routes, busy, onSubmit }: {
   onClose: () => void;
+  /** Haritadan istasyon tıklanarak açıldıysa önceden seçili istasyon */
+  baslangicIstId?: string;
   stations: { id: string; code: string; name: string }[];
   vehicles: Vehicle[];
   gorevler: Gorev[];
@@ -450,7 +463,7 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, routes, 
   busy: boolean;
   onSubmit: (stationId: string, vehicleId: string | null, hedefId: string | null, tur: number) => void;
 }) {
-  const [stationId, setStationId] = useState('');
+  const [stationId, setStationId] = useState(baslangicIstId || '');
   const [hedefId, setHedefId] = useState('');
   const [tur, setTur] = useState(1);
   const [vehicleId, setVehicleId] = useState(''); // '' = en yakın boşta araç
@@ -499,6 +512,11 @@ function CagriModal({ onClose, stations, vehicles, gorevler, distances, routes, 
         <select value={stationId} onChange={(e) => setStationId(e.target.value)}>
           {renderOpts(stations.map((s) => ({ v: s.id, t: `${s.code} · ${s.name}` })), stationId, '— İstasyon seçin —')}
         </select>
+        {baslangicIstId && (
+          <div style={{ fontSize: 11.5, color: '#166534', marginTop: 4, fontWeight: 600 }}>
+            İstasyon haritadan seçildi — dilerseniz değiştirebilirsiniz.
+          </div>
+        )}
       </div>
       <div className="field">
         <label>Sefer hedefi (boşaltma istasyonu) {turModu && <span className="req">*</span>}</label>
