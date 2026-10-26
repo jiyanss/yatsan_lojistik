@@ -25,6 +25,9 @@ export interface Station {
   type: StationType;
   note?: string;
   active?: boolean;
+  /** Canlı harita konumu (Araç Takip → Harita): enlem/boylam; düzenleme modunda haritadan seçilir */
+  lat?: number | null;
+  lng?: number | null;
   createdAt?: string;
 }
 

@@ -4,18 +4,41 @@
 //   • Her araç: boşta / yolda / istasyonda / dolu bekliyor
 //   • Şoförün bastığı pinler canlı görünür
 //   • İstasyon ihtiyacında görev, çağıran istasyona EN YAKIN boşta araca otomatik düşer (veya yönetici elle atar)
+//   • CANLI HARİTA: Leaflet + OpenStreetMap — istasyonlar haritaya yerleştirilir,
+//     araçlar pin bazlı konumda gösterilir, aktif rota planları çizgiyle izlenir
 // ============================================================
 import { useMemo, useState } from 'react';
-import { createGorev, enKisaKm, enUygunBosArac, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, paydosAktif, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
+import dynamic from 'next/dynamic';
+import { createGorev, enKisaKm, enUygunBosArac, aracinStasyonu, gorevPin, isBosArac, istasyondanAracCagir, paydosAktif, update, OPEN_GOREV_DURUMLARI, today } from '@/lib/db';
 import { fbErr, GOREV_DURUM, MOLA_TIP, PIN_LABEL } from '@/lib/constants';
 import { fmtDT, fmtKm } from '@/lib/format';
 import { gorevTalepMi, seferBiten, seferToplam } from '@/lib/types';
-import type { Distance, Gorev, RoutePlan, UserProfile, Vehicle } from '@/lib/types';
+import type { Distance, Gorev, RoutePlan, Station, UserProfile, Vehicle } from '@/lib/types';
 import Icon from '@/components/Icon';
 import { EmptyState, GorevDurumBadge, GorevTipBadge, Modal, VehicleStatusBadge, Note, confirmDialog, renderOpts } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useCollections } from '@/hooks/useData';
 import type { ViewCtx } from './context';
+
+// Harita yalnız tarayıcıda yüklenir (Leaflet window ister) — SSR dışı dinamik import.
+const TakipHarita = dynamic(() => import('@/components/takip-harita'), {
+  ssr: false,
+  loading: () => (
+    <div style={{ display: 'grid', placeItems: 'center', height: '100%', fontSize: 12.5, color: 'var(--muted)' }}>
+      Harita yükleniyor…
+    </div>
+  ),
+});
+
+// Harita legend renkleri — takip-harita.tsx'teki RENK ile birebir aynı
+const HARITA_RENK: { ad: string; renk: string }[] = [
+  { ad: 'Boşta', renk: '#16a34a' },
+  { ad: 'Yeni görev', renk: '#dc2626' },
+  { ad: 'Dolu gidiyor', renk: '#ea580c' },
+  { ad: 'Yolda (boş)', renk: '#2563eb' },
+  { ad: 'Dolu bekliyor', renk: '#ca8a04' },
+  { ad: 'Yükleme istasyonunda', renk: '#7c3aed' },
+];
 
 export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   const toast = useToast();
@@ -23,10 +46,12 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
   const [cagriOpen, setCagriOpen] = useState(false);
   const [gorevVer, setGorevVer] = useState<Vehicle | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editMode, setEditMode] = useState(false); // haritada istasyon yerleştirme/taşıma
+  const [pendingIst, setPendingIst] = useState<string | null>(null); // haritaya tıklanacak istasyon
 
   const vehicles = (data?.vehicles || null) as Vehicle[] | null;
   const gorevler = (data?.gorevler || []) as Gorev[];
-  const stations = (data?.stations || []) as { id: string; code: string; name: string }[];
+  const stations = (data?.stations || []) as Station[];
   const users = (data?.users || []) as (UserProfile & { uid: string })[];
   const distances = (data?.distances || []) as Distance[];
   const routes = (data?.routes || []) as RoutePlan[];
@@ -123,6 +148,20 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
     catch (e) { toast(fbErr(e), 'error'); }
   }
 
+  /* ---- Canlı harita: istasyon yerleştirme / taşıma (lat-lng stations koleksiyonuna yazılır) ---- */
+  async function istasyonYerlestir(istId: string, lat: number, lng: number) {
+    try {
+      await update('stations', istId, { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) });
+      toast(`${stName(istId)} haritaya yerleştirildi — sürükleyerek ince ayar yapabilirsiniz`);
+      setPendingIst(null);
+    } catch (e) { toast(fbErr(e), 'error'); }
+  }
+
+  async function istasyonTasi(istId: string, lat: number, lng: number) {
+    try { await update('stations', istId, { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) }); }
+    catch (e) { toast(fbErr(e), 'error'); }
+  }
+
   return (
     <>
       <Note type="info">
@@ -136,6 +175,92 @@ export default function TakipView({ ctx }: { ctx: ViewCtx }) {
         {bozukAracVar && <> <b style={{ color: '#b45309' }}>Dikkat:</b> kodu boş görünen araçlar eski bir yazım hatasından
         bozulmuştur — <b>Araçlar</b> sayfasından Düzenle ile bilgilerini yeniden girin (aynı kayıt onarılır, geçmiş bağlantıları korunur).</>}
       </Note>
+
+      {/* CANLI HARİTA — istasyonlar + pin bazlı araç konumları + aktif rota planları */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="card-body" style={{ padding: '12px 14px 13px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 800, fontSize: 14, display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Icon name="mappin" size={15} /> Canlı Harita
+              <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--muted)' }}>· Leaflet / OpenStreetMap</span>
+            </div>
+            {ctx.canEdit && (
+              <button
+                className={editMode ? 'btn sm' : 'btn sm secondary'}
+                onClick={() => { setEditMode((x) => !x); setPendingIst(null); }}
+              >
+                <Icon name="pencil" size={12} /> {editMode ? 'Konum düzenlemesi açık' : 'İstasyon konumlarını düzenle'}
+              </button>
+            )}
+          </div>
+
+          {/* Renk açıklaması (legend) */}
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', margin: '9px 0 0', alignItems: 'center' }}>
+            {HARITA_RENK.map((r) => (
+              <span key={r.ad} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: r.renk, display: 'inline-block', border: '1.5px solid #fff', boxShadow: '0 0 0 1px rgba(15,23,42,.15)' }} />
+                {r.ad}
+              </span>
+            ))}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>
+              <span style={{ width: 22, height: 0, borderTop: '3px dashed #0284c7', display: 'inline-block' }} />
+              Aktif rota planı
+            </span>
+          </div>
+
+          {/* Düzenleme modu: yerleşmemiş istasyonlar — seç, sonra haritada yerine tıkla */}
+          {editMode && (
+            (() => {
+              const yerlesmemis = stations.filter((s) => s.lat == null || s.lng == null);
+              if (!yerlesmemis.length) {
+                return (
+                  <div style={{ margin: '9px 0 0', fontSize: 11.5, color: '#166534', background: '#f0fdf4', borderRadius: 9, padding: '7px 10px', fontWeight: 600 }}>
+                    Tüm istasyonlar haritada yerli — sürükleyerek ince ayar yapabilirsiniz. Konumlar anında kaydedilir.
+                  </div>
+                );
+              }
+              return (
+                <div style={{ margin: '9px 0 0', fontSize: 11.5, background: '#fffbeb', color: '#92400e', borderRadius: 9, padding: '8px 10px' }}>
+                  <b>Yerleşmemiş istasyonlar ({yerlesmemis.length}):</b> önce birini seçin, sonra haritada doğru noktaya tıklayın.
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                    {yerlesmemis.map((s) => (
+                      <button
+                        key={s.id}
+                        className={pendingIst === s.id ? 'btn sm' : 'btn sm secondary'}
+                        onClick={() => setPendingIst((x) => (x === s.id ? null : s.id))}
+                      >
+                        <Icon name="mappin" size={11} /> {s.code}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()
+          )}
+
+          <div style={{
+            height: 430, borderRadius: 12, overflow: 'hidden', marginTop: 9,
+            border: '1px solid var(--border, #e3e8ef)', background: '#e8eef4',
+          }}>
+            <TakipHarita
+              stations={stations}
+              vehicles={sorted}
+              gorevler={gorevler}
+              routes={routes}
+              users={users}
+              vardiyaYaz={vardiyaDurumYaz}
+              editMode={editMode}
+              pendingIstId={pendingIst}
+              onPlace={istasyonYerlestir}
+              onMoved={istasyonTasi}
+            />
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 6 }}>
+            Araç konumları şoför pinlerinden türetilir (GPS yok) — yoldaki araç iki istasyon arası tahmini orta noktada gösterilir.
+            {editMode && ' Yerleştirme sonrası istasyonları sürükleyip bırakarak taşıyabilirsiniz.'}
+          </div>
+        </div>
+      </div>
 
       <div className="toolbar">
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
