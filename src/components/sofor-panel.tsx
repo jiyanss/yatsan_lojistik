@@ -537,6 +537,32 @@ export default function SoforPanel({ user, onLogout }: { user: UserProfile; onLo
   );
 }
 
+/* ---------------- "Şu an neredesin" çözümlemesi ----------------
+ * Şoförün attığı SON konum pinine göre kartta kırmızı bant gösterilir:
+ *   varış/bekleme pinleri (VARDIM_DOLU, VARDIM_BOS, HEDEF_VARDIM, ISTATASYONDA)
+ *     → "ŞU AN: X İSTASYONUNDASIN"
+ *   çıkış pinleri (DOLU_CIKTIM, CIKTIM, DONUS_CIKTIM) → "ŞU AN YOLDASIN — HEDEF: X İSTASYONU"
+ * Konum pini hiç atılmadıysa (yalnız ATANDI / YENI görev) bant gösterilmez —
+ * kart zaten kırmızı çerçeve + "YENİ GÖREV" bildirimiyle öne çıkar. */
+function suAnNerede(g: Gorev): { ist: string | null; mod: 'ISTASYONDA' | 'YOLDA' } | null {
+  const pins = g.pins || [];
+  for (let i = pins.length - 1; i >= 0; i--) {
+    const t = pins[i].tip;
+    if (t === 'ATANDI' || t === 'TAMAM' || t === 'IPTAL') continue; // konum pini değil
+    if (t === 'VARDIM_DOLU' || t === 'VARDIM_BOS')
+      return { ist: g.toId || g.fromId || null, mod: 'ISTASYONDA' }; // indirme istasyonunda
+    if (t === 'HEDEF_VARDIM')
+      return { ist: (g.tip === 'CAGRI' ? g.toId : g.fromId) || g.toId || null, mod: 'ISTASYONDA' }; // yükleme istasyonuna dönüldü
+    if (t === 'ISTASYONDA')
+      return { ist: (g.tip === 'CAGRI' || !g.dolu ? g.toId : g.fromId) || g.toId || null, mod: 'ISTASYONDA' };
+    if (t === 'DOLU_CIKTIM' || t === 'CIKTIM')
+      return { ist: g.toId || g.fromId || null, mod: 'YOLDA' }; // yola çıktı — hedefe gidiyor
+    if (t === 'DONUS_CIKTIM')
+      return { ist: g.fromId || g.toId || null, mod: 'YOLDA' }; // boş dönüşte — yükleme istasyonuna gidiyor
+  }
+  return null;
+}
+
 /* ---------------- Tek görev kartı + pin butonları ---------------- */
 function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer }: {
   g: Gorev;
@@ -560,6 +586,8 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
   const siradaki = Math.min(seferBiten(g) + 1, seferTop);
   const sonSefer = seferli && seferSonMu(g);
   const btnStyle: React.CSSProperties = { padding: '14px 12px', fontSize: 14.5, fontWeight: 800, borderRadius: 12, whiteSpace: 'normal', textAlign: 'center' };
+  // Son atılan pinin istasyonu — kırmızı "şu an buradasın" bandı (Task 19)
+  const suAn = suAnNerede(g);
 
   // Duruma göre bir sonraki adım açıklaması
   const adim = !cagri && (doluHat || seferli) ? ({
@@ -636,6 +664,23 @@ function GorevCard({ g, busy, stName, km, yolYaz, uyari, onPin, onDevam, onSefer
                 {PIN_LABEL[p.tip] || p.tip} · {new Date(p.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* ŞU AN KONUM BANDI — şoförün attığı son pinin istasyonu, kırmızı ve belirgin */}
+        {suAn && (
+          <div style={{
+            marginTop: 10, background: '#dc2626', color: '#fff', borderRadius: 10,
+            padding: '11px 12px', display: 'flex', alignItems: 'center', gap: 9,
+            fontWeight: 900, fontSize: 14, lineHeight: 1.35,
+            boxShadow: '0 2px 6px rgba(220,38,38,.35)',
+          }}>
+            <span style={{ display: 'flex', flexShrink: 0 }}><Icon name={suAn.mod === 'ISTASYONDA' ? 'mappin' : 'truck'} size={18} /></span>
+            <span>
+              {suAn.mod === 'ISTASYONDA'
+                ? <>ŞU AN: {stName(suAn.ist)} İSTASYONUNDASIN</>
+                : <>ŞU AN YOLDASIN — HEDEF: {stName(suAn.ist)} İSTASYONU</>}
+            </span>
           </div>
         )}
 
